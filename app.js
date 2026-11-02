@@ -1,3598 +1,2436 @@
-```javascript
 /* ============================================================
-   CRAVECART — COMPLETE FRONTEND JAVASCRIPT
-   Version: 1.0.0
+   CRAVECART — PREMIUM VEGETARIAN FOOD ORDERING WEBSITE
+   File: app.js
+
    Features:
    - Vegetarian product catalogue
-   - Search, categories and sorting
-   - Shopping cart and quantity management
-   - Wishlist
-   - Coupon discounts
-   - Checkout and demo order creation
-   - Invoice, print and download
-   - LocalStorage persistence
-   - Mobile navigation and notifications
+   - Product search, category filtering and sorting
+   - Shopping cart and quantity controls
+   - Wishlist / favourites
+   - Coupon codes
+   - Checkout and order history
+   - Invoice generation, printing and download
+   - localStorage persistence
+   - Newsletter demo
+   - Mobile navigation and toast notifications
 
    IMPORTANT:
-   This is a FRONTEND DEMO.
-   Real authentication, shared database, server-side coupon
-   validation and online payments require a backend.
+   This version is a frontend demo. Orders and admin data are
+   stored in this browser's localStorage, not a shared database.
 ============================================================ */
 
-"use strict";
-
 (() => {
-    /* ========================================================
-       1. CONFIGURATION
-    ======================================================== */
+  "use strict";
 
-    const CONFIG = {
-        currency: "INR",
-        locale: "en-IN",
+  /* ==========================================================
+     1. CONFIGURATION
+  ========================================================== */
 
-        storage: {
-            products: "cravecart_products",
-            cart: "cravecart_cart",
-            wishlist: "cravecart_wishlist",
-            orders: "cravecart_orders",
-            coupon: "cravecart_coupon",
-            lastOrder: "cravecart_last_order",
-            customer: "cravecart_customer"
-        },
+  const CONFIG = {
+    currency: "INR",
+    locale: "en-IN",
+    taxRate: 0.05,
+    deliveryFee: 39,
+    freeDeliveryMinimum: 499,
+    minimumOrder: 99,
 
-        deliveryFee: 39,
-        freeDeliveryMinimum: 499,
-        minimumOrder: 99,
-        taxRate: 0.05,
+    storage: {
+      products: "cravecart_products",
+      cart: "cravecart_cart",
+      wishlist: "cravecart_wishlist",
+      orders: "cravecart_orders",
+      coupon: "cravecart_coupon",
+      lastOrder: "cravecart_last_order",
+      newsletter: "cravecart_newsletter"
+    }
+  };
 
-        maximumQuantity: 99,
-        maximumVisibleProducts: 220,
+  const CATEGORY_NAMES = {
+    all: "All Products",
+    pizza: "Pizza",
+    burger: "Burgers",
+    indian: "Indian Food",
+    chinese: "Chinese",
+    snacks: "Snacks",
+    dessert: "Desserts",
+    drinks: "Drinks"
+  };
 
-        /*
-         * Replace these demo coupons with a backend API
-         * before using the website for real orders.
-         */
-        coupons: {
-            CRAVE10: {
-                type: "percent",
-                value: 10,
-                maxDiscount: 100,
-                minimum: 199,
-                description: "10% off, up to ₹100"
-            },
+  const CATEGORY_ICONS = {
+    all: "🍽️",
+    pizza: "🍕",
+    burger: "🍔",
+    indian: "🍛",
+    chinese: "🥡",
+    snacks: "🍟",
+    dessert: "🍰",
+    drinks: "🥤"
+  };
 
-            WELCOME50: {
-                type: "fixed",
-                value: 50,
-                minimum: 299,
-                description: "₹50 off on orders of ₹299 or more"
-            },
+  const COUPONS = {
+    CRAVE10: {
+      type: "percent",
+      value: 10,
+      minimum: 199,
+      maximumDiscount: 150,
+      description: "10% off on orders above ₹199"
+    },
 
-            FREESHIP: {
-                type: "shipping",
-                value: 0,
-                minimum: 0,
-                description: "Free delivery"
-            }
-        }
+    WELCOME50: {
+      type: "flat",
+      value: 50,
+      minimum: 299,
+      maximumDiscount: 50,
+      description: "₹50 off on orders above ₹299"
+    },
+
+    FREESHIP: {
+      type: "shipping",
+      value: 0,
+      minimum: 199,
+      maximumDiscount: 39,
+      description: "Free delivery on orders above ₹199"
+    }
+  };
+
+  const $ = (selector, root = document) =>
+    root.querySelector(selector);
+
+  const $$ = (selector, root = document) =>
+    Array.from(root.querySelectorAll(selector));
+
+  const money = (amount) =>
+    new Intl.NumberFormat(CONFIG.locale, {
+      style: "currency",
+      currency: CONFIG.currency,
+      maximumFractionDigits: 2
+    }).format(Number(amount) || 0);
+
+  const number = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const safeJSON = (value, fallback) => {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed ?? fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
+  const readStorage = (key, fallback) => {
+    try {
+      return safeJSON(localStorage.getItem(key), fallback);
+    } catch {
+      return fallback;
+    }
+  };
+
+  const writeStorage = (key, value) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch (error) {
+      console.warn("CraveCart could not save data:", error);
+      return false;
+    }
+  };
+
+  const escapeHTML = (value) =>
+    String(value ?? "").replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#039;"
+    })[character]);
+
+  const createId = (prefix = "CC") =>
+    `${prefix}-${Date.now().toString(36).toUpperCase()}-${Math.random()
+      .toString(36)
+      .slice(2, 7)
+      .toUpperCase()}`;
+
+  const formatDate = (dateValue = new Date()) =>
+    new Intl.DateTimeFormat("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(new Date(dateValue));
+
+  /* ==========================================================
+     2. VEGETARIAN PRODUCT CATALOGUE
+     Products are automatically seeded on first visit.
+     No non-vegetarian products are included.
+  ========================================================== */
+
+  const SEED_PRODUCTS = [
+    // PIZZA
+    {
+      id: "veg-pizza-001",
+      name: "Margherita Pizza",
+      category: "pizza",
+      price: 179,
+      originalPrice: 229,
+      description: "Classic pizza with mozzarella, tomato sauce and basil.",
+      badge: "Bestseller",
+      stock: 30,
+      available: true,
+      image: "https://images.unsplash.com/photo-1579751626657-72bc17010498?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-pizza-002",
+      name: "Farmhouse Pizza",
+      category: "pizza",
+      price: 279,
+      originalPrice: 329,
+      description: "Loaded with capsicum, onion, tomato and mushrooms.",
+      badge: "Popular",
+      stock: 24,
+      available: true,
+      image: "https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-pizza-003",
+      name: "Paneer Tikka Pizza",
+      category: "pizza",
+      price: 299,
+      originalPrice: 349,
+      description: "Tandoori paneer, onion, peppers and creamy cheese.",
+      badge: "Chef's Special",
+      stock: 20,
+      available: true,
+      image: "https://images.unsplash.com/photo-1571407970349-bc81e7e96d47?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-pizza-004",
+      name: "Four Cheese Pizza",
+      category: "pizza",
+      price: 319,
+      originalPrice: 379,
+      description: "A rich blend of cheese on a crisp pizza base.",
+      badge: "Premium",
+      stock: 16,
+      available: true,
+      image: "https://images.unsplash.com/photo-1574071318508-1cdbab80d002?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-pizza-005",
+      name: "Mexican Veg Pizza",
+      category: "pizza",
+      price: 269,
+      originalPrice: 319,
+      description: "Spicy beans, peppers, sweet corn and melted cheese.",
+      badge: "Spicy",
+      stock: 18,
+      available: true,
+      image: "https://images.unsplash.com/photo-1604382355076-af4b0eb60143?auto=format&fit=crop&w=700&q=85"
+    },
+
+    // BURGERS
+    {
+      id: "veg-burger-001",
+      name: "Classic Veg Burger",
+      category: "burger",
+      price: 99,
+      originalPrice: 129,
+      description: "Crispy vegetable patty with lettuce and house sauce.",
+      badge: "Bestseller",
+      stock: 35,
+      available: true,
+      image: "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-burger-002",
+      name: "Paneer Crunch Burger",
+      category: "burger",
+      price: 149,
+      originalPrice: 179,
+      description: "Crunchy paneer patty, fresh vegetables and creamy sauce.",
+      badge: "Popular",
+      stock: 28,
+      available: true,
+      image: "https://images.unsplash.com/photo-1550547660-d9450f859349?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-burger-003",
+      name: "Double Cheese Burger",
+      category: "burger",
+      price: 169,
+      originalPrice: 199,
+      description: "A double cheese treat with a delicious veggie patty.",
+      badge: "Cheesy",
+      stock: 22,
+      available: true,
+      image: "https://images.unsplash.com/photo-1571091718767-18b5b1457add?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-burger-004",
+      name: "Spicy Aloo Burger",
+      category: "burger",
+      price: 89,
+      originalPrice: 109,
+      description: "Spiced potato patty, onions and tangy mint sauce.",
+      badge: "Value Pick",
+      stock: 32,
+      available: true,
+      image: "https://images.unsplash.com/photo-1586190848861-99aa4a171e90?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-burger-005",
+      name: "Mushroom Swiss Burger",
+      category: "burger",
+      price: 189,
+      originalPrice: 229,
+      description: "Sautéed mushrooms, Swiss-style cheese and veggie patty.",
+      badge: "Premium",
+      stock: 15,
+      available: true,
+      image: "https://images.unsplash.com/photo-1553979459-d2229ba7433a?auto=format&fit=crop&w=700&q=85"
+    },
+
+    // INDIAN FOOD
+    {
+      id: "veg-indian-001",
+      name: "Paneer Butter Masala",
+      category: "indian",
+      price: 229,
+      originalPrice: 269,
+      description: "Soft paneer in a rich tomato and butter gravy.",
+      badge: "Bestseller",
+      stock: 25,
+      available: true,
+      image: "https://images.unsplash.com/photo-1631452180519-c014fe946bc7?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-indian-002",
+      name: "Shahi Paneer",
+      category: "indian",
+      price: 249,
+      originalPrice: 289,
+      description: "Creamy royal paneer curry with aromatic spices.",
+      badge: "Premium",
+      stock: 20,
+      available: true,
+      image: "https://images.unsplash.com/photo-1585937421612-70a008356fbe?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-indian-003",
+      name: "Dal Makhani",
+      category: "indian",
+      price: 179,
+      originalPrice: 219,
+      description: "Slow-cooked black lentils finished with butter and cream.",
+      badge: "Comfort Food",
+      stock: 25,
+      available: true,
+      image: "https://images.unsplash.com/photo-1546833999-b9f581a1996d?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-indian-004",
+      name: "Veg Biryani",
+      category: "indian",
+      price: 189,
+      originalPrice: 229,
+      description: "Fragrant basmati rice, vegetables and whole spices.",
+      badge: "Popular",
+      stock: 28,
+      available: true,
+      image: "https://images.unsplash.com/photo-1563379091339-03246963d96c?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-indian-005",
+      name: "Chole Bhature",
+      category: "indian",
+      price: 149,
+      originalPrice: 179,
+      description: "Spiced chickpea curry served with fluffy bhature.",
+      badge: "North Indian",
+      stock: 24,
+      available: true,
+      image: "https://images.unsplash.com/photo-1626132647523-66f5bf380027?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-indian-006",
+      name: "Masala Dosa",
+      category: "indian",
+      price: 119,
+      originalPrice: 149,
+      description: "Golden dosa filled with spiced potato masala.",
+      badge: "South Indian",
+      stock: 30,
+      available: true,
+      image: "https://images.unsplash.com/photo-1668236543090-82eba5ee5976?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-indian-007",
+      name: "Paneer Tikka",
+      category: "indian",
+      price: 219,
+      originalPrice: 259,
+      description: "Tandoori paneer cubes with peppers and spices.",
+      badge: "Tandoori",
+      stock: 18,
+      available: true,
+      image: "https://images.unsplash.com/photo-1567188040759-fb8a883dc6d8?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-indian-008",
+      name: "Veg Fried Rice",
+      category: "indian",
+      price: 139,
+      originalPrice: 169,
+      description: "Wok-tossed rice with vegetables and mild seasoning.",
+      badge: "",
+      stock: 28,
+      available: true,
+      image: "https://images.unsplash.com/photo-1603133872878-684f208fb84b?auto=format&fit=crop&w=700&q=85"
+    },
+
+    // CHINESE
+    {
+      id: "veg-chinese-001",
+      name: "Veg Hakka Noodles",
+      category: "chinese",
+      price: 149,
+      originalPrice: 179,
+      description: "Noodles tossed with crunchy vegetables and sauces.",
+      badge: "Popular",
+      stock: 28,
+      available: true,
+      image: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-chinese-002",
+      name: "Veg Manchurian",
+      category: "chinese",
+      price: 159,
+      originalPrice: 189,
+      description: "Vegetable dumplings in a tangy Indo-Chinese sauce.",
+      badge: "Spicy",
+      stock: 22,
+      available: true,
+      image: "https://images.unsplash.com/photo-1512058564366-18510be2db19?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-chinese-003",
+      name: "Chilli Paneer",
+      category: "chinese",
+      price: 199,
+      originalPrice: 239,
+      description: "Paneer tossed with peppers, onions and chilli sauce.",
+      badge: "Chef's Special",
+      stock: 20,
+      available: true,
+      image: "https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-chinese-004",
+      name: "Veg Spring Rolls",
+      category: "chinese",
+      price: 119,
+      originalPrice: 149,
+      description: "Crispy rolls filled with seasoned vegetables.",
+      badge: "Crispy",
+      stock: 25,
+      available: true,
+      image: "https://images.unsplash.com/photo-1548507200-9a3e3f9c2f2b?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-chinese-005",
+      name: "Schezwan Noodles",
+      category: "chinese",
+      price: 169,
+      originalPrice: 199,
+      description: "Hot and spicy noodles with vegetables and Schezwan sauce.",
+      badge: "Hot",
+      stock: 20,
+      available: true,
+      image: "https://images.unsplash.com/photo-1585032226651-759b368d7246?auto=format&fit=crop&w=700&q=85"
+    },
+
+    // SNACKS
+    {
+      id: "veg-snacks-001",
+      name: "French Fries",
+      category: "snacks",
+      price: 89,
+      originalPrice: 109,
+      description: "Golden, crispy fries with a pinch of seasoning.",
+      badge: "Classic",
+      stock: 40,
+      available: true,
+      image: "https://images.unsplash.com/photo-1573080496219-bb080dd4f877?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-snacks-002",
+      name: "Peri Peri Fries",
+      category: "snacks",
+      price: 109,
+      originalPrice: 139,
+      description: "Crispy fries tossed in a bold peri peri seasoning.",
+      badge: "Spicy",
+      stock: 35,
+      available: true,
+      image: "https://images.unsplash.com/photo-1630384060421-cb20d0e0649d?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-snacks-003",
+      name: "Veg Cheese Sandwich",
+      category: "snacks",
+      price: 119,
+      originalPrice: 149,
+      description: "Toasted bread with cheese and fresh vegetables.",
+      badge: "Quick Bite",
+      stock: 25,
+      available: true,
+      image: "https://images.unsplash.com/photo-1528735602780-2552fd46c7af?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-snacks-004",
+      name: "Paneer Wrap",
+      category: "snacks",
+      price: 139,
+      originalPrice: 169,
+      description: "Soft wrap filled with paneer, vegetables and mint sauce.",
+      badge: "Filling",
+      stock: 25,
+      available: true,
+      image: "https://images.unsplash.com/photo-1626700051175-6818013e1d4f?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-snacks-005",
+      name: "Cheese Garlic Bread",
+      category: "snacks",
+      price: 129,
+      originalPrice: 159,
+      description: "Toasted garlic bread topped with melted cheese.",
+      badge: "Cheesy",
+      stock: 22,
+      available: true,
+      image: "https://images.unsplash.com/photo-1573140247632-f8fd74997d5c?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-snacks-006",
+      name: "Veg Momos",
+      category: "snacks",
+      price: 99,
+      originalPrice: 129,
+      description: "Steamed vegetable dumplings served with spicy chutney.",
+      badge: "Street Food",
+      stock: 30,
+      available: true,
+      image: "https://images.unsplash.com/photo-1563245372-f21724e3856d?auto=format&fit=crop&w=700&q=85"
+    },
+
+    // DESSERTS
+    {
+      id: "veg-dessert-001",
+      name: "Chocolate Brownie",
+      category: "dessert",
+      price: 99,
+      originalPrice: 129,
+      description: "Rich chocolate brownie with a soft, fudgy centre.",
+      badge: "Bestseller",
+      stock: 25,
+      available: true,
+      image: "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-dessert-002",
+      name: "Chocolate Cake",
+      category: "dessert",
+      price: 149,
+      originalPrice: 179,
+      description: "Moist chocolate cake layered with chocolate frosting.",
+      badge: "Chocolate Lover",
+      stock: 18,
+      available: true,
+      image: "https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-dessert-003",
+      name: "Strawberry Cheesecake",
+      category: "dessert",
+      price: 179,
+      originalPrice: 219,
+      description: "Creamy cheesecake with a strawberry topping.",
+      badge: "Premium",
+      stock: 12,
+      available: true,
+      image: "https://images.unsplash.com/photo-1533134242443-d4fd215305ad?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-dessert-004",
+      name: "Vanilla Ice Cream",
+      category: "dessert",
+      price: 79,
+      originalPrice: 99,
+      description: "Smooth vanilla ice cream served chilled.",
+      badge: "Classic",
+      stock: 30,
+      available: true,
+      image: "https://images.unsplash.com/photo-1563805042-7684c019e1cb?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-dessert-005",
+      name: "Gulab Jamun",
+      category: "dessert",
+      price: 89,
+      originalPrice: 109,
+      description: "Soft milk-solid dumplings in fragrant sugar syrup.",
+      badge: "Indian Sweet",
+      stock: 30,
+      available: true,
+      image: "https://images.unsplash.com/photo-1666190092159-2f5c6e7b3a76?auto=format&fit=crop&w=700&q=85"
+    },
+
+    // DRINKS
+    {
+      id: "veg-drinks-001",
+      name: "Mango Smoothie",
+      category: "drinks",
+      price: 119,
+      originalPrice: 149,
+      description: "A refreshing mango smoothie made with ripe mangoes.",
+      badge: "Refreshing",
+      stock: 25,
+      available: true,
+      image: "https://images.unsplash.com/photo-1505252585461-04db1eb84625?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-drinks-002",
+      name: "Cold Coffee",
+      category: "drinks",
+      price: 109,
+      originalPrice: 139,
+      description: "Chilled coffee blended until smooth and creamy.",
+      badge: "Popular",
+      stock: 25,
+      available: true,
+      image: "https://images.unsplash.com/photo-1461023058943-07fcbe16d735?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-drinks-003",
+      name: "Fresh Lemon Soda",
+      category: "drinks",
+      price: 69,
+      originalPrice: 89,
+      description: "A fizzy lemon drink with a fresh citrus flavour.",
+      badge: "Refreshing",
+      stock: 40,
+      available: true,
+      image: "https://images.unsplash.com/photo-1513558161293-cdaf765edfd7?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-drinks-004",
+      name: "Strawberry Milkshake",
+      category: "drinks",
+      price: 129,
+      originalPrice: 159,
+      description: "Creamy strawberry milkshake with a fruity flavour.",
+      badge: "Sweet Treat",
+      stock: 20,
+      available: true,
+      image: "https://images.unsplash.com/photo-1572490122747-3968b75cc699?auto=format&fit=crop&w=700&q=85"
+    },
+    {
+      id: "veg-drinks-005",
+      name: "Masala Chai",
+      category: "drinks",
+      price: 39,
+      originalPrice: 49,
+      description: "Indian tea brewed with aromatic spices and milk.",
+      badge: "Everyday Favourite",
+      stock: 50,
+      available: true,
+      image: "https://images.unsplash.com/photo-1571934811356-5cc061b6821f?auto=format&fit=crop&w=700&q=85"
+    }
+  ];
+
+  /* ==========================================================
+     3. APPLICATION STATE
+  ========================================================== */
+
+  let products = [];
+  let cart = [];
+  let wishlist = [];
+  let orders = [];
+  let activeCategory = "all";
+  let searchTerm = "";
+  let sortMode = "featured";
+  let activeCoupon = null;
+  let lastOrder = null;
+  let toastTimer = null;
+
+  /* ==========================================================
+     4. STORAGE AND PRODUCT NORMALISATION
+  ========================================================== */
+
+  function normaliseProduct(product, index = 0) {
+    const category = String(product.category || "snacks").toLowerCase();
+
+    return {
+      id: String(product.id || `product-${index + 1}`),
+      name: String(product.name || "Vegetarian Food"),
+      category: CATEGORY_NAMES[category] ? category : "snacks",
+      price: Math.max(0, number(product.price)),
+      originalPrice: Math.max(
+        number(product.originalPrice),
+        number(product.price)
+      ),
+      description: String(product.description || "Freshly prepared vegetarian food."),
+      badge: String(product.badge || ""),
+      image: String(product.image || ""),
+      stock: Math.max(0, Math.floor(number(product.stock ?? 20))),
+      available: product.available !== false
+    };
+  }
+
+  function initialiseProducts() {
+    const savedProducts = readStorage(CONFIG.storage.products, null);
+
+    if (Array.isArray(savedProducts) && savedProducts.length > 0) {
+      products = savedProducts.map(normaliseProduct);
+    } else {
+      products = SEED_PRODUCTS.map(normaliseProduct);
+      writeStorage(CONFIG.storage.products, products);
+    }
+
+    // Keep only products that have a usable ID.
+    products = products.filter((product) => product.id);
+  }
+
+  function loadState() {
+    const storedCart = readStorage(CONFIG.storage.cart, []);
+    const storedWishlist = readStorage(CONFIG.storage.wishlist, []);
+    const storedOrders = readStorage(CONFIG.storage.orders, []);
+
+    cart = Array.isArray(storedCart)
+      ? storedCart
+          .map((item) => ({
+            id: String(item.id || ""),
+            quantity: Math.max(1, Math.floor(number(item.quantity || 1)))
+          }))
+          .filter((item) => item.id)
+      : [];
+
+    wishlist = Array.isArray(storedWishlist)
+      ? [...new Set(storedWishlist.map(String))]
+      : [];
+
+    orders = Array.isArray(storedOrders) ? storedOrders : [];
+
+    activeCoupon = readStorage(CONFIG.storage.coupon, null);
+    lastOrder = readStorage(CONFIG.storage.lastOrder, null);
+  }
+
+  function saveState() {
+    writeStorage(CONFIG.storage.cart, cart);
+    writeStorage(CONFIG.storage.wishlist, wishlist);
+    writeStorage(CONFIG.storage.orders, orders);
+    writeStorage(CONFIG.storage.coupon, activeCoupon);
+    writeStorage(CONFIG.storage.lastOrder, lastOrder);
+  }
+
+  function getProduct(productId) {
+    return products.find((product) => product.id === String(productId));
+  }
+
+  function getAvailableProducts() {
+    return products.filter((product) => product.available && product.stock > 0);
+  }
+
+  /* ==========================================================
+     5. TOAST NOTIFICATIONS
+  ========================================================== */
+
+  function showToast(message, type = "success") {
+    const container = $("#toast-container");
+
+    if (!container) {
+      console.log(`[CraveCart ${type}] ${message}`);
+      return;
+    }
+
+    const toast = document.createElement("div");
+    toast.className = `cc-toast cc-toast-${type}`;
+    toast.setAttribute("role", "status");
+
+    const icon = type === "error"
+      ? "✕"
+      : type === "warning"
+        ? "!"
+        : "✓";
+
+    toast.innerHTML = `
+      <span class="cc-toast-icon" aria-hidden="true">${icon}</span>
+      <span class="cc-toast-message">${escapeHTML(message)}</span>
+      <button class="cc-toast-close" type="button" aria-label="Dismiss notification">×</button>
+    `;
+
+    container.appendChild(toast);
+
+    requestAnimationFrame(() => toast.classList.add("is-visible"));
+
+    const removeToast = () => {
+      toast.classList.remove("is-visible");
+      window.setTimeout(() => toast.remove(), 250);
     };
 
+    $(".cc-toast-close", toast)?.addEventListener("click", removeToast);
+    window.setTimeout(removeToast, 3500);
+  }
 
-    /* ========================================================
-       2. HELPERS
-    ======================================================== */
+  /* ==========================================================
+     6. PRODUCT IMAGE FALLBACK
+  ========================================================== */
 
-    const $ = (selector, parent = document) =>
-        parent.querySelector(selector);
-
-    const $$ = (selector, parent = document) =>
-        Array.from(parent.querySelectorAll(selector));
-
-
-    function money(value) {
-        const amount = Number(value) || 0;
-
-        return new Intl.NumberFormat(CONFIG.locale, {
-            style: "currency",
-            currency: CONFIG.currency,
-            maximumFractionDigits: 2,
-            minimumFractionDigits: 2
-        }).format(amount);
+  function fallbackImage(imageElement) {
+    if (!imageElement || imageElement.dataset.fallbackUsed === "true") {
+      return;
     }
 
+    imageElement.dataset.fallbackUsed = "true";
 
-    function number(value) {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : 0;
+    // A built-in SVG fallback means the card still looks present
+    // if an external image URL fails.
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" width="600" height="450" viewBox="0 0 600 450">
+        <rect width="600" height="450" fill="#202020"/>
+        <circle cx="300" cy="200" r="90" fill="#ff6a1a" opacity=".2"/>
+        <text x="300" y="215" font-size="80" text-anchor="middle">🥗</text>
+        <text x="300" y="330" fill="#ffffff" font-size="25" text-anchor="middle" font-family="Arial">CraveCart</text>
+        <text x="300" y="365" fill="#aaaaaa" font-size="16" text-anchor="middle" font-family="Arial">Fresh vegetarian food</text>
+      </svg>
+    `;
+
+    imageElement.src = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+  }
+
+  document.addEventListener("error", (event) => {
+    const target = event.target;
+
+    if (
+      target instanceof HTMLImageElement &&
+      target.classList.contains("product-image")
+    ) {
+      fallbackImage(target);
     }
-
-
-    function safeText(value) {
-        return String(value ?? "")
-            .replaceAll("&", "&amp;")
-            .replaceAll("<", "&lt;")
-            .replaceAll(">", "&gt;")
-            .replaceAll('"', "&quot;")
-            .replaceAll("'", "&#039;");
-    }
-
-
-    function createId(prefix = "cc") {
-        return (
-            prefix +
-            "-" +
-            Date.now().toString(36) +
-            "-" +
-            Math.random().toString(36).slice(2, 8)
-        );
-    }
-
-
-    function readStorage(key, fallback) {
-        try {
-            const stored = localStorage.getItem(key);
-
-            if (stored === null) {
-                return fallback;
-            }
-
-            return JSON.parse(stored);
-        } catch (error) {
-            console.warn("CraveCart: Could not read storage:", key);
-            return fallback;
-        }
-    }
-
-
-    function writeStorage(key, value) {
-        try {
-            localStorage.setItem(key, JSON.stringify(value));
-            return true;
-        } catch (error) {
-            console.error("CraveCart: Could not save storage:", key);
-            showToast(
-                "Storage unavailable",
-                "Your browser could not save this change.",
-                "error"
-            );
-            return false;
-        }
-    }
-
-
-    function setText(selector, value) {
-        const element = $(selector);
-
-        if (element) {
-            element.textContent = value;
-        }
-    }
-
-
-    function setHidden(selector, hidden) {
-        const element = $(selector);
-
-        if (element) {
-            element.hidden = Boolean(hidden);
-        }
-    }
-
-
-    function scrollToSection(selector) {
-        const element = $(selector);
-
-        if (element) {
-            element.scrollIntoView({
-                behavior: "smooth",
-                block: "start"
-            });
-        }
-    }
-
-
-    function normaliseCategory(category) {
-        return String(category || "")
-            .trim()
-            .toLowerCase()
-            .replaceAll("&", "and")
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-|-$/g, "");
-    }
-
-
-    function getProductCategory(product) {
-        return normaliseCategory(
-            product.categorySlug ||
-            product.category ||
-            "snacks"
-        );
-    }
-
-
-    function getImageUrl(url) {
-        const fallback =
-            "https://images.unsplash.com/photo-1547592180-85f173990554" +
-            "?auto=format&fit=crop&w=800&q=80";
-
-        if (typeof url !== "string" || !url.trim()) {
-            return fallback;
-        }
-
-        try {
-            const parsed = new URL(url, window.location.href);
-
-            if (
-                parsed.protocol !== "https:" &&
-                parsed.protocol !== "http:"
-            ) {
-                return fallback;
-            }
-
-            return parsed.href;
-        } catch {
-            return fallback;
-        }
-    }
-
-
-    function imageFallback(image) {
-        image.onerror = null;
-
-        image.src =
-            "https://images.unsplash.com/photo-1547592180-85f173990554" +
-            "?auto=format&fit=crop&w=800&q=80";
-    }
-
-
-    function updateAppStatus(message) {
-        const status = $("#app-status");
-
-        if (status) {
-            status.textContent = message;
-        }
-    }
-
-
-    /* ========================================================
-       3. VEGETARIAN STARTER CATALOGUE
-
-       These are sample products for the frontend demo.
-       Prices and availability are illustrative.
-
-       The products use direct image URLs rather than
-       Google Images search-result URLs.
-
-       Only vegetarian products are included.
-    ======================================================== */
-
-    const STARTER_PRODUCTS = [
-
-        // PIZZA
-
-        {
-            id: "veg-pizza-001",
-            name: "Classic Margherita Pizza",
-            category: "pizza",
-            price: 179,
-            originalPrice: 229,
-            description: "Classic tomato sauce, mozzarella and basil.",
-            image:
-                "https://images.unsplash.com/photo-1579751626657-72bc17010498?auto=format&fit=crop&w=800&q=80",
-            badge: "Bestseller",
-            rating: 4.8,
-            stock: 30,
-            featured: true
-        },
-
-        {
-            id: "veg-pizza-002",
-            name: "Farmhouse Veg Pizza",
-            category: "pizza",
-            price: 249,
-            originalPrice: 299,
-            description: "Bell peppers, onions, mushrooms and cheese.",
-            image:
-                "https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=800&q=80",
-            badge: "Popular",
-            rating: 4.7,
-            stock: 25,
-            featured: true
-        },
-
-        {
-            id: "veg-pizza-003",
-            name: "Paneer Tikka Pizza",
-            category: "pizza",
-            price: 269,
-            originalPrice: 319,
-            description: "Tandoori paneer, peppers and creamy cheese.",
-            image:
-                "https://images.unsplash.com/photo-1571407970349-bc81e7e96d47?auto=format&fit=crop&w=800&q=80",
-            badge: "Chef's Pick",
-            rating: 4.9,
-            stock: 20
-        },
-
-        {
-            id: "veg-pizza-004",
-            name: "Golden Corn Pizza",
-            category: "pizza",
-            price: 199,
-            originalPrice: 249,
-            description: "Sweet corn, mozzarella and Italian herbs.",
-            image:
-                "https://images.unsplash.com/photo-1579751626657-72bc17010498?auto=format&fit=crop&w=800&q=80",
-            badge: "Value Pick",
-            rating: 4.5,
-            stock: 24
-        },
-
-
-        // BURGERS
-
-        {
-            id: "veg-burger-001",
-            name: "Crispy Veg Burger",
-            category: "burger",
-            price: 99,
-            originalPrice: 129,
-            description: "Crunchy vegetable patty, lettuce and house sauce.",
-            image:
-                "https://images.unsplash.com/photo-1520072959219-c595dc870360?auto=format&fit=crop&w=800&q=80",
-            badge: "Bestseller",
-            rating: 4.6,
-            stock: 40,
-            featured: true
-        },
-
-        {
-            id: "veg-burger-002",
-            name: "Paneer Crunch Burger",
-            category: "burger",
-            price: 149,
-            originalPrice: 179,
-            description: "Crispy paneer, fresh vegetables and mint mayo.",
-            image:
-                "https://images.unsplash.com/photo-1553979459-d2229ba7433a?auto=format&fit=crop&w=800&q=80",
-            badge: "Popular",
-            rating: 4.8,
-            stock: 22
-        },
-
-        {
-            id: "veg-burger-003",
-            name: "Double Cheese Veg Burger",
-            category: "burger",
-            price: 169,
-            originalPrice: 199,
-            description: "Vegetable patty with double cheese.",
-            image:
-                "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=800&q=80",
-            badge: "Cheesy",
-            rating: 4.7,
-            stock: 18
-        },
-
-        {
-            id: "veg-burger-004",
-            name: "Aloo Tikki Burger",
-            category: "burger",
-            price: 89,
-            originalPrice: 109,
-            description: "Spiced potato patty with tangy Indian chutney.",
-            image:
-                "https://images.unsplash.com/photo-1550547660-d9450f859349?auto=format&fit=crop&w=800&q=80",
-            badge: "Budget Pick",
-            rating: 4.5,
-            stock: 35
-        },
-
-
-        // INDIAN
-
-        {
-            id: "veg-indian-001",
-            name: "Paneer Butter Masala",
-            category: "indian",
-            price: 229,
-            originalPrice: 269,
-            description: "Paneer cubes in a rich tomato-butter gravy.",
-            image:
-                "https://images.unsplash.com/photo-1631452180519-c014fe946bc7?auto=format&fit=crop&w=800&q=80",
-            badge: "Bestseller",
-            rating: 4.9,
-            stock: 20,
-            featured: true
-        },
-
-        {
-            id: "veg-indian-002",
-            name: "Veg Dum Biryani",
-            category: "indian",
-            price: 189,
-            originalPrice: 229,
-            description: "Fragrant basmati rice with vegetables and spices.",
-            image:
-                "https://images.unsplash.com/photo-1589302168068-964664d93dc0?auto=format&fit=crop&w=800&q=80",
-            badge: "Popular",
-            rating: 4.8,
-            stock: 30,
-            featured: true
-        },
-
-        {
-            id: "veg-indian-003",
-            name: "Chole Bhature",
-            category: "indian",
-            price: 149,
-            originalPrice: 179,
-            description: "Spiced chickpeas served with fluffy bhature.",
-            image:
-                "https://images.unsplash.com/photo-1626132647523-66f5bf380027?auto=format&fit=crop&w=800&q=80",
-            badge: "North Indian",
-            rating: 4.7,
-            stock: 25
-        },
-
-        {
-            id: "veg-indian-004",
-            name: "Dal Makhani",
-            category: "indian",
-            price: 179,
-            originalPrice: 219,
-            description: "Slow-cooked black lentils in a creamy gravy.",
-            image:
-                "https://images.unsplash.com/photo-1546833999-b9f581a1996d?auto=format&fit=crop&w=800&q=80",
-            badge: "Comfort Food",
-            rating: 4.7,
-            stock: 22
-        },
-
-        {
-            id: "veg-indian-005",
-            name: "Masala Dosa",
-            category: "indian",
-            price: 119,
-            originalPrice: 149,
-            description: "Crispy dosa with potato masala and chutneys.",
-            image:
-                "https://images.unsplash.com/photo-1668236543090-82eba5ee5976?auto=format&fit=crop&w=800&q=80",
-            badge: "South Indian",
-            rating: 4.6,
-            stock: 25
-        },
-
-        {
-            id: "veg-indian-006",
-            name: "Veg Hakka Noodles",
-            category: "indian",
-            price: 159,
-            originalPrice: 189,
-            description: "Stir-fried noodles with crunchy vegetables.",
-            image:
-                "https://images.unsplash.com/photo-1585032226651-759b368d7246?auto=format&fit=crop&w=800&q=80",
-            badge: "Quick Bite",
-            rating: 4.5,
-            stock: 26
-        },
-
-
-        // CHINESE
-
-        {
-            id: "veg-chinese-001",
-            name: "Veg Manchurian",
-            category: "chinese",
-            price: 159,
-            originalPrice: 189,
-            description: "Vegetable dumplings in a savoury Indo-Chinese sauce.",
-            image:
-                "https://images.unsplash.com/photo-1563245372-f21724e3856d?auto=format&fit=crop&w=800&q=80",
-            badge: "Popular",
-            rating: 4.6,
-            stock: 20
-        },
-
-        {
-            id: "veg-chinese-002",
-            name: "Veg Fried Rice",
-            category: "chinese",
-            price: 139,
-            originalPrice: 169,
-            description: "Fried rice with fresh vegetables and mild seasoning.",
-            image:
-                "https://images.unsplash.com/photo-1603133872878-684f208fb84b?auto=format&fit=crop&w=800&q=80",
-            badge: "Classic",
-            rating: 4.5,
-            stock: 28
-        },
-
-        {
-            id: "veg-chinese-003",
-            name: "Chilli Paneer",
-            category: "chinese",
-            price: 199,
-            originalPrice: 239,
-            description: "Paneer tossed with peppers and chilli sauce.",
-            image:
-                "https://images.unsplash.com/photo-1631452180519-c014fe946bc7?auto=format&fit=crop&w=800&q=80",
-            badge: "Spicy",
-            rating: 4.7,
-            stock: 18
-        },
-
-        {
-            id: "veg-chinese-004",
-            name: "Veg Spring Rolls",
-            category: "chinese",
-            price: 119,
-            originalPrice: 149,
-            description: "Crispy rolls filled with seasoned vegetables.",
-            image:
-                "https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&q=80",
-            badge: "Crispy",
-            rating: 4.5,
-            stock: 24
-        },
-
-
-        // SNACKS
-
-        {
-            id: "veg-snack-001",
-            name: "Golden French Fries",
-            category: "snacks",
-            price: 89,
-            originalPrice: 109,
-            description: "Golden potato fries with a light seasoning.",
-            image:
-                "https://images.unsplash.com/photo-1573080496219-bb080dd4f877?auto=format&fit=crop&w=800&q=80",
-            badge: "Bestseller",
-            rating: 4.6,
-            stock: 40
-        },
-
-        {
-            id: "veg-snack-002",
-            name: "Crispy Onion Rings",
-            category: "snacks",
-            price: 99,
-            originalPrice: 129,
-            description: "Golden onion rings served with a dip.",
-            image:
-                "https://images.unsplash.com/photo-1639024471283-03518883512d?auto=format&fit=crop&w=800&q=80",
-            badge: "Crunchy",
-            rating: 4.4,
-            stock: 25
-        },
-
-        {
-            id: "veg-snack-003",
-            name: "Paneer Tikka",
-            category: "snacks",
-            price: 189,
-            originalPrice: 229,
-            description: "Marinated paneer grilled with peppers and spices.",
-            image:
-                "https://images.unsplash.com/photo-1599487488170-d11ec9c172f0?auto=format&fit=crop&w=800&q=80",
-            badge: "Chef's Pick",
-            rating: 4.8,
-            stock: 20
-        },
-
-        {
-            id: "veg-snack-004",
-            name: "Veg Cheese Sandwich",
-            category: "snacks",
-            price: 109,
-            originalPrice: 139,
-            description: "Toasted bread with vegetables and melted cheese.",
-            image:
-                "https://images.unsplash.com/photo-1528735602780-2552fd46c7af?auto=format&fit=crop&w=800&q=80",
-            badge: "Quick Bite",
-            rating: 4.5,
-            stock: 26
-        },
-
-        {
-            id: "veg-snack-005",
-            name: "Crispy Samosa",
-            category: "snacks",
-            price: 39,
-            originalPrice: 49,
-            description: "Traditional potato and pea-filled samosa.",
-            image:
-                "https://images.unsplash.com/photo-1601050690597-df0568f70950?auto=format&fit=crop&w=800&q=80",
-            badge: "Indian Classic",
-            rating: 4.5,
-            stock: 50
-        },
-
-
-        // DESSERTS
-
-        {
-            id: "veg-dessert-001",
-            name: "Chocolate Brownie",
-            category: "dessert",
-            price: 99,
-            originalPrice: 129,
-            description: "Rich chocolate brownie with a soft centre.",
-            image:
-                "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?auto=format&fit=crop&w=800&q=80",
-            badge: "Chocolate",
-            rating: 4.8,
-            stock: 25
-        },
-
-        {
-            id: "veg-dessert-002",
-            name: "Classic Cheesecake",
-            category: "dessert",
-            price: 149,
-            originalPrice: 179,
-            description: "Creamy cheesecake with a biscuit base.",
-            image:
-                "https://images.unsplash.com/photo-1533134242443-d4fd215305ad?auto=format&fit=crop&w=800&q=80",
-            badge: "Premium",
-            rating: 4.7,
-            stock: 15
-        },
-
-        {
-            id: "veg-dessert-003",
-            name: "Chocolate Ice Cream",
-            category: "dessert",
-            price: 79,
-            originalPrice: 99,
-            description: "Smooth chocolate-flavoured frozen dessert.",
-            image:
-                "https://images.unsplash.com/photo-1563805042-7684c019e1cb?auto=format&fit=crop&w=800&q=80",
-            badge: "Sweet Treat",
-            rating: 4.6,
-            stock: 30
-        },
-
-        {
-            id: "veg-dessert-004",
-            name: "Gulab Jamun",
-            category: "dessert",
-            price: 69,
-            originalPrice: 89,
-            description: "Soft milk-solid dumplings in sweet syrup.",
-            image:
-                "https://images.unsplash.com/photo-1666190092159-5f8f5f4b4c0c?auto=format&fit=crop&w=800&q=80",
-            badge: "Indian Sweet",
-            rating: 4.6,
-            stock: 25
-        },
-
-
-        // DRINKS
-
-        {
-            id: "veg-drink-001",
-            name: "Fresh Lemon Soda",
-            category: "drinks",
-            price: 59,
-            originalPrice: 79,
-            description: "Refreshing lemon soda served chilled.",
-            image:
-                "https://images.unsplash.com/photo-1513558161293-cdaf765edfd7?auto=format&fit=crop&w=800&q=80",
-            badge: "Refreshing",
-            rating: 4.5,
-            stock: 40
-        },
-
-        {
-            id: "veg-drink-002",
-            name: "Mango Smoothie",
-            category: "drinks",
-            price: 119,
-            originalPrice: 149,
-            description: "Creamy mango smoothie with a fruity flavour.",
-            image:
-                "https://images.unsplash.com/photo-1505252585461-04db1eb84625?auto=format&fit=crop&w=800&q=80",
-            badge: "Fruit Favourite",
-            rating: 4.7,
-            stock: 20
-        },
-
-        {
-            id: "veg-drink-003",
-            name: "Cold Coffee",
-            category: "drinks",
-            price: 99,
-            originalPrice: 129,
-            description: "Chilled coffee blended until smooth and creamy.",
-            image:
-                "https://images.unsplash.com/photo-1461023058943-07fcbe16d735?auto=format&fit=crop&w=800&q=80",
-            badge: "Coffee",
-            rating: 4.6,
-            stock: 28
-        },
-
-        {
-            id: "veg-drink-004",
-            name: "Strawberry Milkshake",
-            category: "drinks",
-            price: 109,
-            originalPrice: 139,
-            description: "Creamy strawberry-flavoured milkshake.",
-            image:
-                "https://images.unsplash.com/photo-1572490122747-3968b75cc699?auto=format&fit=crop&w=800&q=80",
-            badge: "Sweet Sip",
-            rating: 4.5,
-            stock: 20
-        }
-    ];
-
-
-    /* ========================================================
-       4. APP STATE
-    ======================================================== */
-
-    let products = [];
-    let cart = [];
-    let wishlist = [];
-    let orders = [];
-
-    let activeCategory = "all";
-    let searchTerm = "";
-    let sortMode = "featured";
-    let appliedCoupon = null;
-    let lastOrder = null;
-
-    let invoiceOrder = null;
-    let toastCounter = 0;
-
-
-    /* ========================================================
-       5. PRODUCT NORMALISATION AND STORAGE
-    ======================================================== */
-
-    function normaliseProduct(product, index = 0) {
-        const safeProduct = product && typeof product === "object"
-            ? product
-            : {};
-
-        const price = Math.max(0, number(safeProduct.price));
-
-        return {
-            ...safeProduct,
-
-            id: String(
-                safeProduct.id ||
-                safeProduct.productId ||
-                `product-${index + 1}`
-            ),
-
-            name: String(safeProduct.name || "Vegetarian Dish"),
-
-            category: getProductCategory(safeProduct),
-
-            price,
-
-            originalPrice: Math.max(
-                price,
-                number(
-                    safeProduct.originalPrice ??
-                    safeProduct.mrp ??
-                    price
-                )
-            ),
-
-            description: String(
-                safeProduct.description ||
-                "A delicious vegetarian favourite."
-            ),
-
-            image: getImageUrl(
-                safeProduct.image ||
-                safeProduct.imageUrl ||
-                safeProduct.photo
-            ),
-
-            badge: String(safeProduct.badge || ""),
-
-            rating: Math.min(
-                5,
-                Math.max(0, number(safeProduct.rating || 4.5))
-            ),
-
-            stock: Math.max(
-                0,
-                Math.floor(number(safeProduct.stock ?? 50))
-            ),
-
-            featured: Boolean(safeProduct.featured),
-
-            available: safeProduct.available !== false &&
-                       safeProduct.isAvailable !== false
-        };
-    }
-
-
-    function loadProducts() {
-        const saved = readStorage(CONFIG.storage.products, null);
-
-        if (Array.isArray(saved) && saved.length > 0) {
-            products = saved
-                .slice(0, CONFIG.maximumVisibleProducts)
-                .map(normaliseProduct);
-        } else {
-            products = STARTER_PRODUCTS.map(normaliseProduct);
-            writeStorage(CONFIG.storage.products, products);
-        }
-
-        /*
-         * An existing admin-created product catalogue may use
-         * a different schema. normaliseProduct handles common
-         * field names but does not replace the backend.
-         */
-    }
-
-
-    function saveProducts() {
-        writeStorage(CONFIG.storage.products, products);
-    }
-
-
-    function loadCart() {
-        const saved = readStorage(CONFIG.storage.cart, []);
-
-        if (!Array.isArray(saved)) {
-            cart = [];
-            return;
-        }
-
-        cart = saved
-            .map(item => ({
-                id: String(item.id || item.productId || ""),
-                quantity: Math.max(
-                    1,
-                    Math.min(
-                        CONFIG.maximumQuantity,
-                        Math.floor(number(item.quantity || 1))
-                    )
-                )
-            }))
-            .filter(item =>
-                products.some(product => product.id === item.id)
-            );
-
-        saveCart();
-    }
-
-
-    function saveCart() {
-        writeStorage(CONFIG.storage.cart, cart);
-    }
-
-
-    function loadWishlist() {
-        const saved = readStorage(CONFIG.storage.wishlist, []);
-
-        wishlist = Array.isArray(saved)
-            ? [...new Set(saved.map(String))]
-                .filter(id => products.some(product => product.id === id))
-            : [];
-
-        saveWishlist();
-    }
-
-
-    function saveWishlist() {
-        writeStorage(CONFIG.storage.wishlist, wishlist);
-    }
-
-
-    function loadOrders() {
-        const saved = readStorage(CONFIG.storage.orders, []);
-        orders = Array.isArray(saved) ? saved : [];
-    }
-
-
-    function saveOrders() {
-        writeStorage(CONFIG.storage.orders, orders);
-    }
-
-
-    function findProduct(productId) {
-        return products.find(product => product.id === String(productId));
-    }
-
-
-    function getCartQuantity(productId) {
-        const item = cart.find(entry => entry.id === String(productId));
-        return item ? item.quantity : 0;
-    }
-
-
-    function getCartProducts() {
-        return cart
-            .map(item => {
-                const product = findProduct(item.id);
-
-                if (!product) {
-                    return null;
-                }
-
-                return {
-                    ...product,
-                    quantity: item.quantity,
-                    lineTotal: product.price * item.quantity
-                };
-            })
-            .filter(Boolean);
-    }
-
-
-    function getCartItemCount() {
-        return cart.reduce((total, item) => total + item.quantity, 0);
-    }
-
-
-    function getSubtotal() {
-        return getCartProducts().reduce(
-            (total, item) => total + item.lineTotal,
-            0
-        );
-    }
-
-
-    function getCouponDiscount(subtotal = getSubtotal()) {
-        if (!appliedCoupon) {
-            return 0;
-        }
-
-        const coupon = CONFIG.coupons[appliedCoupon];
-
-        if (!coupon || subtotal < coupon.minimum) {
-            return 0;
-        }
-
-        if (coupon.type === "percent") {
-            const discount = subtotal * (coupon.value / 100);
-
-            return Math.min(
-                discount,
-                number(coupon.maxDiscount || discount)
-            );
-        }
-
-        if (coupon.type === "fixed") {
-            return Math.min(coupon.value, subtotal);
-        }
-
-        return 0;
-    }
-
-
-    function getDeliveryFee(subtotal = getSubtotal()) {
-        if (subtotal <= 0) {
-            return 0;
-        }
-
-        if (subtotal >= CONFIG.freeDeliveryMinimum) {
-            return 0;
-        }
-
-        if (
-            appliedCoupon &&
-            CONFIG.coupons[appliedCoupon]?.type === "shipping"
-        ) {
-            return 0;
-        }
-
-        return CONFIG.deliveryFee;
-    }
-
-
-    function getTax(subtotal = getSubtotal()) {
-        return Math.round(subtotal * CONFIG.taxRate * 100) / 100;
-    }
-
-
-    function getTotal() {
-        const subtotal = getSubtotal();
-        const delivery = getDeliveryFee(subtotal);
-        const tax = getTax(subtotal);
-        const discount = getCouponDiscount(subtotal);
-
-        return Math.max(
-            0,
-            Math.round((subtotal + delivery + tax - discount) * 100) / 100
-        );
-    }
-
-
-    function persistCoupon() {
-        writeStorage(CONFIG.storage.coupon, appliedCoupon);
-    }
-
-
-    function loadCoupon() {
-        const saved = readStorage(CONFIG.storage.coupon, null);
-
-        if (
-            typeof saved === "string" &&
-            Object.prototype.hasOwnProperty.call(CONFIG.coupons, saved)
-        ) {
-            appliedCoupon = saved;
-        } else {
-            appliedCoupon = null;
-        }
-    }
-
-
-    /* ========================================================
-       6. TOAST NOTIFICATIONS
-    ======================================================== */
-
-    function showToast(title, message = "", type = "success") {
-        const container = $("#toast-container");
-
-        if (!container) {
-            console.log(`[CraveCart] ${title}: ${message}`);
-            return;
-        }
-
-        toastCounter += 1;
-
-        const toast = document.createElement("div");
-        toast.className = `toast toast-${type}`;
-        toast.dataset.toastId = String(toastCounter);
-        toast.setAttribute("role", "status");
-
-        const iconMap = {
-            success: "fa-circle-check",
-            error: "fa-circle-exclamation",
-            warning: "fa-triangle-exclamation",
-            info: "fa-circle-info"
-        };
-
-        toast.innerHTML = `
-            <span class="toast-icon">
-                <i class="fa-solid ${iconMap[type] || iconMap.info}"></i>
-            </span>
-
-            <span class="toast-content">
-                <strong>${safeText(title)}</strong>
-                <small>${safeText(message)}</small>
-            </span>
+  }, true);
+
+  /* ==========================================================
+     7. PRODUCT CARD RENDERING
+  ========================================================== */
+
+  function productCardHTML(product) {
+    const discount = product.originalPrice > product.price
+      ? Math.round(
+          ((product.originalPrice - product.price) / product.originalPrice) * 100
+        )
+      : 0;
+
+    const isFavourite = wishlist.includes(product.id);
+    const outOfStock = !product.available || product.stock <= 0;
+    const categoryName = CATEGORY_NAMES[product.category] || "Food";
+
+    return `
+      <article class="product-card" data-product-id="${escapeHTML(product.id)}">
+        <div class="product-image-wrap">
+          <img
+            class="product-image"
+            src="${escapeHTML(product.image)}"
+            alt="${escapeHTML(product.name)}"
+            loading="lazy"
+            decoding="async"
+          >
+
+          ${product.badge ? `
+            <span class="product-badge">${escapeHTML(product.badge)}</span>
+          ` : ""}
+
+          ${discount > 0 ? `
+            <span class="product-discount">${discount}% OFF</span>
+          ` : ""}
+
+          <button
+            type="button"
+            class="product-wishlist-btn ${isFavourite ? "is-active" : ""}"
+            data-action="toggle-wishlist"
+            data-id="${escapeHTML(product.id)}"
+            aria-label="${isFavourite ? "Remove from" : "Add to"} favourites"
+            aria-pressed="${isFavourite}"
+          >${isFavourite ? "♥" : "♡"}</button>
+        </div>
+
+        <div class="product-details">
+          <div class="product-category">
+            <span aria-hidden="true">${CATEGORY_ICONS[product.category] || "🍽️"}</span>
+            ${escapeHTML(categoryName)}
+          </div>
+
+          <h3 class="product-title">${escapeHTML(product.name)}</h3>
+
+          <p class="product-description">${escapeHTML(product.description)}</p>
+
+          <div class="product-footer">
+            <div class="product-price-wrap">
+              <span class="product-price">${money(product.price)}</span>
+              ${product.originalPrice > product.price ? `
+                <del class="product-original-price">${money(product.originalPrice)}</del>
+              ` : ""}
+            </div>
 
             <button
-                type="button"
-                class="toast-close"
-                aria-label="Dismiss notification"
+              type="button"
+              class="add-to-cart-btn"
+              data-action="add-to-cart"
+              data-id="${escapeHTML(product.id)}"
+              ${outOfStock ? "disabled" : ""}
             >
-                <i class="fa-solid fa-xmark"></i>
+              ${outOfStock ? "Sold Out" : '<span aria-hidden="true">＋</span> Add'}
             </button>
-        `;
+          </div>
+        </div>
+      </article>
+    `;
+  }
 
-        container.appendChild(toast);
+  function renderProducts() {
+    const grid = $("#products-grid");
+    if (!grid) return;
 
-        requestAnimationFrame(() => {
-            toast.classList.add("show", "is-visible", "active");
-        });
+    let visibleProducts = getAvailableProducts();
 
-        const removeToast = () => {
-            toast.classList.remove("show", "is-visible", "active");
-
-            window.setTimeout(() => {
-                toast.remove();
-            }, 250);
-        };
-
-        $(".toast-close", toast)?.addEventListener("click", removeToast);
-
-        window.setTimeout(removeToast, 4000);
+    if (activeCategory !== "all") {
+      visibleProducts = visibleProducts.filter(
+        (product) => product.category === activeCategory
+      );
     }
 
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
 
-    /* ========================================================
-       7. PRODUCT CATALOGUE RENDERING
-    ======================================================== */
-
-    function getFilteredProducts() {
-        let result = products.filter(product => product.available);
-
-        if (activeCategory !== "all") {
-            result = result.filter(
-                product => product.category === activeCategory
-            );
-        }
-
-        if (searchTerm) {
-            const query = searchTerm.toLowerCase();
-
-            result = result.filter(product => {
-                const searchable = [
-                    product.name,
-                    product.description,
-                    product.category,
-                    product.badge
-                ]
-                    .join(" ")
-                    .toLowerCase();
-
-                return searchable.includes(query);
-            });
-        }
-
-        switch (sortMode) {
-            case "price-low":
-                result.sort((a, b) => a.price - b.price);
-                break;
-
-            case "price-high":
-                result.sort((a, b) => b.price - a.price);
-                break;
-
-            case "name-asc":
-                result.sort((a, b) => a.name.localeCompare(b.name));
-                break;
-
-            case "popular":
-                result.sort((a, b) => b.rating - a.rating);
-                break;
-
-            case "featured":
-            default:
-                result.sort((a, b) => {
-                    if (a.featured !== b.featured) {
-                        return Number(b.featured) - Number(a.featured);
-                    }
-
-                    return b.rating - a.rating;
-                });
-        }
-
-        return result;
+      visibleProducts = visibleProducts.filter((product) =>
+        [
+          product.name,
+          product.description,
+          product.category,
+          product.badge
+        ].some((value) => String(value).toLowerCase().includes(term))
+      );
     }
 
+    switch (sortMode) {
+      case "price-low":
+      case "price-asc":
+        visibleProducts.sort((a, b) => a.price - b.price);
+        break;
 
-    function renderProductCard(product) {
-        const isSaved = wishlist.includes(product.id);
-        const quantity = getCartQuantity(product.id);
-        const hasDiscount = product.originalPrice > product.price;
-        const discountPercent = hasDiscount
-            ? Math.round(
-                ((product.originalPrice - product.price) /
-                    product.originalPrice) * 100
-            )
+      case "price-high":
+      case "price-desc":
+        visibleProducts.sort((a, b) => b.price - a.price);
+        break;
+
+      case "name":
+      case "name-asc":
+        visibleProducts.sort((a, b) => a.name.localeCompare(b.name));
+        break;
+
+      case "discount":
+        visibleProducts.sort((a, b) => {
+          const discountA = a.originalPrice
+            ? (a.originalPrice - a.price) / a.originalPrice
+            : 0;
+          const discountB = b.originalPrice
+            ? (b.originalPrice - b.price) / b.originalPrice
             : 0;
 
-        const isOutOfStock = product.stock <= 0;
-
-        return `
-            <article
-                class="product-card"
-                data-product-id="${safeText(product.id)}"
-            >
-                <div class="product-image-wrap">
-
-                    <img
-                        class="product-image"
-                        src="${safeText(product.image)}"
-                        alt="${safeText(product.name)}"
-                        loading="lazy"
-                        decoding="async"
-                        onerror="imageFallback(this)"
-                    >
-
-                    <span class="product-veg-indicator" title="Vegetarian">
-                        <span></span>
-                    </span>
-
-                    ${
-                        product.badge
-                            ? `
-                                <span class="product-badge">
-                                    ${safeText(product.badge)}
-                                </span>
-                            `
-                            : ""
-                    }
-
-                    ${
-                        discountPercent > 0
-                            ? `
-                                <span class="product-discount">
-                                    ${discountPercent}% OFF
-                                </span>
-                            `
-                            : ""
-                    }
-
-                    <button
-                        type="button"
-                        class="product-wishlist-button ${isSaved ? "is-favourite active" : ""}"
-                        data-action="toggle-wishlist"
-                        data-id="${safeText(product.id)}"
-                        aria-label="${isSaved ? "Remove from" : "Add to"} wishlist"
-                        aria-pressed="${isSaved}"
-                    >
-                        <i class="${isSaved ? "fa-solid" : "fa-regular"} fa-heart"></i>
-                    </button>
-
-                </div>
-
-                <div class="product-card-body">
-
-                    <div class="product-card-meta">
-                        <span class="product-category">
-                            ${safeText(product.category.replaceAll("-", " "))}
-                        </span>
-
-                        <span class="product-rating">
-                            <i class="fa-solid fa-star"></i>
-                            ${product.rating.toFixed(1)}
-                        </span>
-                    </div>
-
-                    <h3 class="product-title">
-                        ${safeText(product.name)}
-                    </h3>
-
-                    <p class="product-description">
-                        ${safeText(product.description)}
-                    </p>
-
-                    <div class="product-card-bottom">
-
-                        <div class="product-price-wrap">
-                            <strong class="product-price">
-                                ${money(product.price)}
-                            </strong>
-
-                            ${
-                                hasDiscount
-                                    ? `
-                                        <del class="product-original-price">
-                                            ${money(product.originalPrice)}
-                                        </del>
-                                    `
-                                    : ""
-                            }
-                        </div>
-
-                        ${
-                            isOutOfStock
-                                ? `
-                                    <button
-                                        type="button"
-                                        class="add-to-cart-button"
-                                        disabled
-                                    >
-                                        Out of stock
-                                    </button>
-                                `
-                                : quantity > 0
-                                    ? `
-                                        <button
-                                            type="button"
-                                            class="add-to-cart-button added"
-                                            data-action="add-to-cart"
-                                            data-id="${safeText(product.id)}"
-                                        >
-                                            <i class="fa-solid fa-plus"></i>
-                                            Add more
-                                        </button>
-                                    `
-                                    : `
-                                        <button
-                                            type="button"
-                                            class="add-to-cart-button"
-                                            data-action="add-to-cart"
-                                            data-id="${safeText(product.id)}"
-                                        >
-                                            <i class="fa-solid fa-plus"></i>
-                                            Add
-                                        </button>
-                                    `
-                        }
-
-                    </div>
-
-                </div>
-            </article>
-        `;
-    }
-
-
-    function renderProducts() {
-        const grid = $("#products-grid");
-
-        if (!grid) {
-            console.error("CraveCart: #products-grid was not found.");
-            return;
-        }
-
-        const filtered = getFilteredProducts();
-
-        grid.innerHTML = filtered
-            .map(renderProductCard)
-            .join("");
-
-        setHidden("#no-results", filtered.length !== 0);
-
-        setText(
-            "#product-results-count",
-            `${filtered.length} ${filtered.length === 1 ? "dish" : "dishes"} found`
-        );
-
-        updateActiveFilters();
-
-        setText(
-            "#show-all-products span",
-            activeCategory === "all" && !searchTerm
-                ? "You're viewing the full menu"
-                : "Explore full menu"
-        );
-
-        const showAllButton = $("#show-all-products");
-
-        if (showAllButton) {
-            showAllButton.disabled =
-                activeCategory === "all" && !searchTerm;
-        }
-    }
-
-
-    function updateActiveFilters() {
-        const container = $("#active-filters");
-
-        if (!container) {
-            return;
-        }
-
-        const parts = [
-            `
-                <span class="filter-status">
-                    <i class="fa-solid fa-leaf"></i>
-                    Vegetarian menu
-                </span>
-            `
-        ];
-
-        if (activeCategory !== "all") {
-            parts.push(`
-                <button
-                    type="button"
-                    class="filter-chip"
-                    data-action="clear-category"
-                >
-                    ${safeText(activeCategory.replaceAll("-", " "))}
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            `);
-        }
-
-        if (searchTerm) {
-            parts.push(`
-                <button
-                    type="button"
-                    class="filter-chip"
-                    data-action="clear-search"
-                >
-                    "${safeText(searchTerm)}"
-                    <i class="fa-solid fa-xmark"></i>
-                </button>
-            `);
-        }
-
-        container.innerHTML = parts.join("");
-    }
-
-
-    function updateCategoryButtons() {
-        $$("#category-list [data-category]").forEach(button => {
-            const category = normaliseCategory(button.dataset.category);
-
-            const active = category === activeCategory;
-
-            button.classList.toggle("active", active);
-            button.setAttribute("aria-pressed", String(active));
+          return discountB - discountA;
         });
+        break;
+
+      default:
+        break;
     }
 
+    grid.innerHTML = visibleProducts.map(productCardHTML).join("");
 
-    function selectCategory(category) {
-        activeCategory = normaliseCategory(category || "all");
-
-        if (!activeCategory) {
-            activeCategory = "all";
-        }
-
-        updateCategoryButtons();
-        renderProducts();
-
-        scrollToSection("#products");
+    const resultCount = $("#product-results-count");
+    if (resultCount) {
+      resultCount.textContent = `${visibleProducts.length} product${visibleProducts.length === 1 ? "" : "s"} found`;
     }
 
-
-    function resetFilters() {
-        activeCategory = "all";
-        searchTerm = "";
-        sortMode = "featured";
-
-        const searchInput = $("#product-search");
-        const sortSelect = $("#sort-products");
-
-        if (searchInput) {
-            searchInput.value = "";
-        }
-
-        if (sortSelect) {
-            sortSelect.value = "featured";
-        }
-
-        updateCategoryButtons();
-        renderProducts();
-
-        showToast(
-            "Filters reset",
-            "You're viewing the vegetarian menu.",
-            "success"
-        );
+    const noResults = $("#no-results");
+    if (noResults) {
+      noResults.hidden = visibleProducts.length > 0;
     }
 
+    const activeFilters = $("#active-filters");
+    if (activeFilters) {
+      const parts = [];
 
-    /* ========================================================
-       8. PRODUCT STOCK DISPLAY
-    ======================================================== */
+      if (activeCategory !== "all") {
+        parts.push(CATEGORY_NAMES[activeCategory] || activeCategory);
+      }
 
-    function updateStockForProduct(productId, amount) {
-        const product = findProduct(productId);
+      if (searchTerm) {
+        parts.push(`Search: "${searchTerm}"`);
+      }
 
-        if (!product) {
-            return false;
-        }
-
-        product.stock = Math.max(0, product.stock + amount);
-
-        saveProducts();
-        renderProducts();
-
-        return true;
+      activeFilters.textContent = parts.join(" · ");
     }
 
-
-    /* ========================================================
-       9. CART OPERATIONS
-    ======================================================== */
-
-    function addToCart(productId, quantity = 1) {
-        const product = findProduct(productId);
-
-        if (!product) {
-            showToast("Product unavailable", "This item could not be found.", "error");
-            return;
-        }
-
-        if (!product.available || product.stock <= 0) {
-            showToast("Out of stock", "This item is currently unavailable.", "warning");
-            return;
-        }
-
-        const amount = Math.max(
-            1,
-            Math.floor(number(quantity))
-        );
-
-        const existing = cart.find(item => item.id === product.id);
-        const currentQuantity = existing ? existing.quantity : 0;
-
-        if (currentQuantity + amount > product.stock) {
-            showToast(
-                "Stock limit",
-                `Only ${product.stock} item(s) are available.`,
-                "warning"
-            );
-            return;
-        }
-
-        if (currentQuantity + amount > CONFIG.maximumQuantity) {
-            showToast(
-                "Quantity limit",
-                `You can add up to ${CONFIG.maximumQuantity} of one item.`,
-                "warning"
-            );
-            return;
-        }
-
-        if (existing) {
-            existing.quantity += amount;
-        } else {
-            cart.push({
-                id: product.id,
-                quantity: amount
-            });
-        }
-
-        saveCart();
-        renderCart();
-        renderProducts();
-
-        showToast(
-            "Added to cart",
-            `${product.name} added successfully.`,
-            "success"
-        );
+    const showAll = $("#show-all-products");
+    if (showAll) {
+      showAll.hidden = activeCategory === "all" && !searchTerm;
     }
 
+    // Trigger a custom event for optional animations or integrations.
+    document.dispatchEvent(new CustomEvent("cravecart:products-rendered", {
+      detail: { count: visibleProducts.length }
+    }));
+  }
 
-    function changeCartQuantity(productId, change) {
-        const item = cart.find(entry => entry.id === String(productId));
-        const product = findProduct(productId);
+  /* ==========================================================
+     8. CATEGORY FILTERING
+  ========================================================== */
 
-        if (!item || !product) {
-            return;
-        }
+  function setActiveCategory(category) {
+    activeCategory = CATEGORY_NAMES[category] ? category : "all";
 
-        const nextQuantity = item.quantity + number(change);
+    $$(".category-card").forEach((card) => {
+      const selected = card.dataset.category === activeCategory;
 
-        if (nextQuantity <= 0) {
-            removeFromCart(productId);
-            return;
-        }
+      card.classList.toggle("is-active", selected);
+      card.classList.toggle("active", selected);
 
-        if (nextQuantity > product.stock) {
-            showToast(
-                "Stock limit",
-                `Only ${product.stock} item(s) are available.`,
-                "warning"
-            );
-            return;
-        }
+      if (card.matches("button")) {
+        card.setAttribute("aria-pressed", String(selected));
+      }
+    });
 
-        if (nextQuantity > CONFIG.maximumQuantity) {
-            showToast(
-                "Quantity limit",
-                `Maximum ${CONFIG.maximumQuantity} per item.`,
-                "warning"
-            );
-            return;
-        }
+    renderProducts();
 
-        item.quantity = nextQuantity;
-
-        saveCart();
-        renderCart();
-        renderProducts();
+    const productSection = $("#products");
+    if (productSection && activeCategory !== "all") {
+      productSection.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
     }
+  }
 
+  function renderCategoryCounts() {
+    $$(".category-card").forEach((card) => {
+      const category = card.dataset.category;
+      if (!category) return;
 
-    function removeFromCart(productId) {
-        const product = findProduct(productId);
+      const count = category === "all"
+        ? getAvailableProducts().length
+        : getAvailableProducts().filter((product) => product.category === category).length;
 
-        cart = cart.filter(item => item.id !== String(productId));
+      const countElement = $(".category-count", card);
 
-        saveCart();
-        renderCart();
-        renderProducts();
+      if (countElement) {
+        countElement.textContent = count;
+      }
+    });
+  }
 
-        if (product) {
-            showToast(
-                "Item removed",
-                `${product.name} removed from your cart.`,
-                "info"
-            );
-        }
-    }
+  /* ==========================================================
+     9. CART HELPERS
+  ========================================================== */
 
+  function getCartItems() {
+    return cart
+      .map((item) => {
+        const product = getProduct(item.id);
 
-    function clearCart() {
-        if (cart.length === 0) {
-            return;
-        }
+        if (!product) return null;
 
-        cart = [];
-        appliedCoupon = null;
-
-        const couponInput = $("#coupon-code");
-
-        if (couponInput) {
-            couponInput.value = "";
-        }
-
-        persistCoupon();
-        saveCart();
-        renderCart();
-
-        showToast("Cart cleared", "All items have been removed.", "info");
-    }
-
-
-    function renderCartItems() {
-        const container = $("#cart-items");
-
-        if (!container) {
-            return;
-        }
-
-        const items = getCartProducts();
-
-        if (items.length === 0) {
-            container.innerHTML = `
-                <div class="cart-empty-state" id="cart-empty-state">
-
-                    <div class="empty-state-icon">
-                        <i class="fa-solid fa-bag-shopping"></i>
-                    </div>
-
-                    <h3>Your cart is feeling lonely</h3>
-
-                    <p>
-                        Add something delicious from our vegetarian menu.
-                    </p>
-
-                    <button
-                        type="button"
-                        class="primary-button"
-                        data-action="close-cart"
-                    >
-                        Explore Menu
-                        <i class="fa-solid fa-arrow-right"></i>
-                    </button>
-
-                </div>
-            `;
-
-            return;
-        }
-
-        container.innerHTML = items.map(item => `
-            <article
-                class="cart-item"
-                data-cart-item-id="${safeText(item.id)}"
-            >
-
-                <img
-                    class="cart-item-image"
-                    src="${safeText(item.image)}"
-                    alt="${safeText(item.name)}"
-                    loading="lazy"
-                    onerror="imageFallback(this)"
-                >
-
-                <div class="cart-item-info">
-
-                    <h3 class="cart-item-name">
-                        ${safeText(item.name)}
-                    </h3>
-
-                    <p class="cart-item-price">
-                        ${money(item.price)}
-                    </p>
-
-                    <div class="cart-item-controls">
-
-                        <button
-                            type="button"
-                            class="quantity-button"
-                            data-action="decrease-quantity"
-                            data-id="${safeText(item.id)}"
-                            aria-label="Decrease quantity"
-                        >
-                            <i class="fa-solid fa-minus"></i>
-                        </button>
-
-                        <span class="cart-item-quantity">
-                            ${item.quantity}
-                        </span>
-
-                        <button
-                            type="button"
-                            class="quantity-button"
-                            data-action="increase-quantity"
-                            data-id="${safeText(item.id)}"
-                            aria-label="Increase quantity"
-                        >
-                            <i class="fa-solid fa-plus"></i>
-                        </button>
-
-                    </div>
-
-                </div>
-
-                <div class="cart-item-end">
-
-                    <strong class="cart-item-line-total">
-                        ${money(item.lineTotal)}
-                    </strong>
-
-                    <button
-                        type="button"
-                        class="remove-cart-item"
-                        data-action="remove-cart-item"
-                        data-id="${safeText(item.id)}"
-                        aria-label="Remove ${safeText(item.name)}"
-                    >
-                        <i class="fa-regular fa-trash-can"></i>
-                    </button>
-
-                </div>
-
-            </article>
-        `).join("");
-    }
-
-
-    function renderCart() {
-        renderCartItems();
-
-        const subtotal = getSubtotal();
-        const delivery = getDeliveryFee(subtotal);
-        const tax = getTax(subtotal);
-        const discount = getCouponDiscount(subtotal);
-        const total = getTotal();
-        const count = getCartItemCount();
-
-        setText("#cart-count", String(count));
-        setText("#wishlist-count", String(wishlist.length));
-        setText("#cart-heading-count", String(count));
-
-        setText("#cart-subtotal", money(subtotal));
-        setText("#cart-delivery", delivery === 0 && subtotal > 0 ? "FREE" : money(delivery));
-        setText("#cart-tax", money(tax));
-        setText("#cart-discount", `-${money(discount)}`);
-        setText("#cart-total", money(total));
-        setText("#checkout-total", money(total));
-        setText("#checkout-review-total", money(total));
-
-        setHidden("#discount-row", discount <= 0);
-
-        const progressText = $("#delivery-progress-text");
-        const progressBar = $("#cart-progress-bar");
-
-        if (progressText && progressBar) {
-            const progress = Math.min(
-                100,
-                (subtotal / CONFIG.freeDeliveryMinimum) * 100
-            );
-
-            progressBar.style.width = `${progress}%`;
-
-            if (subtotal <= 0) {
-                progressText.textContent =
-                    `Add items to get started. Free delivery above ${money(CONFIG.freeDeliveryMinimum)}.`;
-            } else if (subtotal >= CONFIG.freeDeliveryMinimum) {
-                progressText.textContent = "Congratulations! You've unlocked free delivery.";
-            } else {
-                progressText.textContent =
-                    `Add ${money(CONFIG.freeDeliveryMinimum - subtotal)} more for free delivery.`;
-            }
-        }
-
-        const checkoutButton = $('[data-action="checkout"]');
-
-        if (checkoutButton) {
-            checkoutButton.disabled =
-                subtotal < CONFIG.minimumOrder;
-
-            checkoutButton.title =
-                subtotal < CONFIG.minimumOrder
-                    ? `Minimum order is ${money(CONFIG.minimumOrder)}`
-                    : "Proceed to checkout";
-        }
-
-        const couponMessage = $("#coupon-message");
-
-        if (couponMessage && !appliedCoupon) {
-            couponMessage.textContent = "";
-            couponMessage.classList.remove("success", "error");
-        }
-
-        updateAppStatus(`${count} item(s) in cart.`);
-    }
-
-
-    /* ========================================================
-       10. COUPONS
-    ======================================================== */
-
-    function applyCoupon() {
-        const input = $("#coupon-code");
-        const message = $("#coupon-message");
-
-        if (!input) {
-            return;
-        }
-
-        const code = input.value.trim().toUpperCase();
-
-        if (!code) {
-            showCouponMessage("Enter a coupon code first.", "error");
-            return;
-        }
-
-        const coupon = CONFIG.coupons[code];
-
-        if (!coupon) {
-            appliedCoupon = null;
-            persistCoupon();
-            renderCart();
-
-            showCouponMessage(
-                "Invalid coupon code. Try CRAVE10, WELCOME50 or FREESHIP.",
-                "error"
-            );
-
-            return;
-        }
-
-        const subtotal = getSubtotal();
-
-        if (subtotal < coupon.minimum) {
-            showCouponMessage(
-                `Add ${money(coupon.minimum - subtotal)} more to use ${code}.`,
-                "error"
-            );
-            return;
-        }
-
-        appliedCoupon = code;
-        persistCoupon();
-
-        renderCart();
-
-        showCouponMessage(
-            `Coupon ${code} applied: ${coupon.description}.`,
-            "success"
-        );
-
-        showToast("Coupon applied", coupon.description, "success");
-    }
-
-
-    function showCouponMessage(message, type) {
-        const element = $("#coupon-message");
-
-        if (!element) {
-            showToast("Coupon", message, type);
-            return;
-        }
-
-        element.textContent = message;
-        element.classList.remove("success", "error");
-        element.classList.add(type);
-    }
-
-
-    function removeCoupon() {
-        appliedCoupon = null;
-        persistCoupon();
-        renderCart();
-
-        showCouponMessage("Coupon removed.", "info");
-    }
-
-
-    /* ========================================================
-       11. WISHLIST
-    ======================================================== */
-
-    function toggleWishlist(productId) {
-        const product = findProduct(productId);
-
-        if (!product) {
-            return;
-        }
-
-        const existingIndex = wishlist.indexOf(product.id);
-
-        if (existingIndex >= 0) {
-            wishlist.splice(existingIndex, 1);
-
-            showToast(
-                "Removed from wishlist",
-                product.name,
-                "info"
-            );
-        } else {
-            wishlist.push(product.id);
-
-            showToast(
-                "Saved to wishlist",
-                product.name,
-                "success"
-            );
-        }
-
-        saveWishlist();
-        renderWishlist();
-        renderProducts();
-        renderCart();
-    }
-
-
-    function renderWishlist() {
-        const container = $("#wishlist-items");
-
-        if (!container) {
-            return;
-        }
-
-        const savedProducts = wishlist
-            .map(findProduct)
-            .filter(Boolean);
-
-        setText("#wishlist-count", String(savedProducts.length));
-
-        if (savedProducts.length === 0) {
-            container.innerHTML = `
-                <div class="wishlist-empty-state">
-
-                    <div class="empty-state-icon">
-                        <i class="fa-regular fa-heart"></i>
-                    </div>
-
-                    <h3>No favourites saved yet</h3>
-
-                    <p>
-                        Tap the heart on a dish to save it here.
-                    </p>
-
-                </div>
-            `;
-
-            return;
-        }
-
-        container.innerHTML = savedProducts.map(product => `
-            <article class="wishlist-item" data-wishlist-id="${safeText(product.id)}">
-
-                <img
-                    class="wishlist-item-image"
-                    src="${safeText(product.image)}"
-                    alt="${safeText(product.name)}"
-                    loading="lazy"
-                    onerror="imageFallback(this)"
-                >
-
-                <div class="wishlist-item-info">
-
-                    <h3>${safeText(product.name)}</h3>
-
-                    <strong>${money(product.price)}</strong>
-
-                    <div class="wishlist-item-actions">
-
-                        <button
-                            type="button"
-                            class="primary-button"
-                            data-action="wishlist-add-to-cart"
-                            data-id="${safeText(product.id)}"
-                            ${product.stock <= 0 ? "disabled" : ""}
-                        >
-                            <i class="fa-solid fa-bag-shopping"></i>
-                            Add to cart
-                        </button>
-
-                        <button
-                            type="button"
-                            class="icon-button"
-                            data-action="toggle-wishlist"
-                            data-id="${safeText(product.id)}"
-                            aria-label="Remove from wishlist"
-                        >
-                            <i class="fa-solid fa-heart"></i>
-                        </button>
-
-                    </div>
-
-                </div>
-
-            </article>
-        `).join("");
-    }
-
-
-    /* ========================================================
-       12. MODAL AND DRAWER MANAGEMENT
-    ======================================================== */
-
-    function setOpenState(element, open) {
-        if (!element) {
-            return;
-        }
-
-        element.hidden = !open;
-
-        element.classList.toggle("is-open", open);
-        element.classList.toggle("open", open);
-        element.classList.toggle("active", open);
-        element.classList.toggle("show", open);
-
-        element.setAttribute("aria-hidden", String(!open));
-
-        if ("inert" in element) {
-            element.inert = !open;
-        }
-
-        if (open) {
-            element.removeAttribute("inert");
-        } else {
-            element.setAttribute("inert", "");
-        }
-    }
-
-
-    function openCart() {
-        closeWishlist();
-        closeCheckout();
-        closeInvoice();
-
-        setOpenState($("#cart-overlay"), true);
-        setOpenState($("#cart-drawer"), true);
-
-        document.body.classList.add("cart-open", "modal-open");
-
-        renderCart();
-
-        window.setTimeout(() => {
-            $('[data-action="close-cart"]')?.focus();
-        }, 50);
-    }
-
-
-    function closeCart() {
-        setOpenState($("#cart-overlay"), false);
-        setOpenState($("#cart-drawer"), false);
-
-        document.body.classList.remove("cart-open");
-
-        if (
-            !$("#wishlist-modal")?.classList.contains("is-open") &&
-            !$("#checkout-modal")?.classList.contains("is-open") &&
-            !$("#invoice-modal")?.classList.contains("is-open")
-        ) {
-            document.body.classList.remove("modal-open");
-        }
-    }
-
-
-    function openWishlist() {
-        closeCart();
-        closeCheckout();
-        closeInvoice();
-
-        renderWishlist();
-
-        setOpenState($("#wishlist-overlay"), true);
-        setOpenState($("#wishlist-modal"), true);
-
-        document.body.classList.add("wishlist-open", "modal-open");
-    }
-
-
-    function closeWishlist() {
-        setOpenState($("#wishlist-overlay"), false);
-        setOpenState($("#wishlist-modal"), false);
-
-        document.body.classList.remove("wishlist-open");
-
-        if (
-            !$("#cart-drawer")?.classList.contains("is-open") &&
-            !$("#checkout-modal")?.classList.contains("is-open") &&
-            !$("#invoice-modal")?.classList.contains("is-open")
-        ) {
-            document.body.classList.remove("modal-open");
-        }
-    }
-
-
-    function openCheckout() {
-        if (getSubtotal() < CONFIG.minimumOrder) {
-            showToast(
-                "Minimum order",
-                `Your subtotal must be at least ${money(CONFIG.minimumOrder)}.`,
-                "warning"
-            );
-            return;
-        }
-
-        closeCart();
-        closeWishlist();
-        closeInvoice();
-
-        fillCustomerForm();
-
-        setText("#checkout-review-total", money(getTotal()));
-
-        setOpenState($("#checkout-overlay"), true);
-        setOpenState($("#checkout-modal"), true);
-
-        document.body.classList.add("checkout-open", "modal-open");
-    }
-
-
-    function closeCheckout() {
-        setOpenState($("#checkout-overlay"), false);
-        setOpenState($("#checkout-modal"), false);
-
-        document.body.classList.remove("checkout-open");
-
-        if (
-            !$("#cart-drawer")?.classList.contains("is-open") &&
-            !$("#wishlist-modal")?.classList.contains("is-open") &&
-            !$("#invoice-modal")?.classList.contains("is-open")
-        ) {
-            document.body.classList.remove("modal-open");
-        }
-    }
-
-
-    function openInvoice(order) {
-        if (!order) {
-            return;
-        }
-
-        invoiceOrder = order;
-
-        closeCart();
-        closeWishlist();
-        closeCheckout();
-
-        renderInvoice(order);
-
-        setOpenState($("#invoice-overlay"), true);
-        setOpenState($("#invoice-modal"), true);
-
-        document.body.classList.add("invoice-open", "modal-open");
-    }
-
-
-    function closeInvoice() {
-        setOpenState($("#invoice-overlay"), false);
-        setOpenState($("#invoice-modal"), false);
-
-        document.body.classList.remove("invoice-open");
-
-        if (
-            !$("#cart-drawer")?.classList.contains("is-open") &&
-            !$("#wishlist-modal")?.classList.contains("is-open") &&
-            !$("#checkout-modal")?.classList.contains("is-open")
-        ) {
-            document.body.classList.remove("modal-open");
-        }
-    }
-
-
-    function closeAllPanels() {
-        closeCart();
-        closeWishlist();
-        closeCheckout();
-        closeInvoice();
-        closeMobileMenu();
-        closeSearch();
-    }
-
-
-    /* ========================================================
-       13. CHECKOUT CUSTOMER DETAILS
-    ======================================================== */
-
-    function fillCustomerForm() {
-        const customer = readStorage(CONFIG.storage.customer, {});
-
-        const fields = {
-            "#customer-name": customer.name,
-            "#customer-phone": customer.phone,
-            "#customer-email": customer.email,
-            "#customer-address": customer.address,
-            "#customer-city": customer.city,
-            "#customer-pincode": customer.pincode
-        };
-
-        Object.entries(fields).forEach(([selector, value]) => {
-            const field = $(selector);
-
-            if (field && value && !field.value) {
-                field.value = value;
-            }
-        });
-    }
-
-
-    function getCustomerDetails() {
         return {
-            name: $("#customer-name")?.value.trim() || "",
-            phone: $("#customer-phone")?.value.trim() || "",
-            email: $("#customer-email")?.value.trim() || "",
-            address: $("#customer-address")?.value.trim() || "",
-            city: $("#customer-city")?.value.trim() || "",
-            pincode: $("#customer-pincode")?.value.trim() || ""
+          ...product,
+          quantity: Math.min(
+            Math.max(1, item.quantity),
+            Math.max(1, product.stock)
+          )
         };
+      })
+      .filter(Boolean);
+  }
+
+  function getSubtotal() {
+    return getCartItems().reduce(
+      (total, item) => total + item.price * item.quantity,
+      0
+    );
+  }
+
+  function getCartQuantity() {
+    return cart.reduce((total, item) => total + item.quantity, 0);
+  }
+
+  function calculateDiscount(subtotal = getSubtotal()) {
+    if (!activeCoupon || !activeCoupon.code) return 0;
+
+    const coupon = COUPONS[String(activeCoupon.code).toUpperCase()];
+    if (!coupon || subtotal < coupon.minimum) return 0;
+
+    if (coupon.type === "percent") {
+      return Math.min(
+        subtotal * (coupon.value / 100),
+        coupon.maximumDiscount
+      );
     }
 
-
-    function saveCustomerDetails(customer) {
-        /*
-         * Demo convenience only.
-         * Avoid saving sensitive personal data on shared devices.
-         * Production applications should use a secure backend.
-         */
-        writeStorage(CONFIG.storage.customer, customer);
+    if (coupon.type === "flat") {
+      return Math.min(coupon.value, subtotal);
     }
 
+    return 0;
+  }
 
-    function validateCustomer(customer) {
-        if (
-            !customer.name ||
-            !customer.phone ||
-            !customer.address ||
-            !customer.city ||
-            !customer.pincode
-        ) {
-            showToast(
-                "Missing details",
-                "Please complete all required checkout fields.",
-                "error"
-            );
-            return false;
-        }
+  function calculateDelivery(subtotal = getSubtotal()) {
+    if (subtotal <= 0) return 0;
 
-        if (!/^[6-9]\d{9}$/.test(customer.phone)) {
-            showToast(
-                "Invalid phone number",
-                "Enter a valid 10-digit Indian mobile number.",
-                "error"
-            );
+    const couponCode = activeCoupon?.code?.toUpperCase();
 
-            $("#customer-phone")?.focus();
-            return false;
-        }
-
-        if (!/^[1-9]\d{5}$/.test(customer.pincode)) {
-            showToast(
-                "Invalid PIN code",
-                "Enter a valid 6-digit PIN code.",
-                "error"
-            );
-
-            $("#customer-pincode")?.focus();
-            return false;
-        }
-
-        if (
-            customer.email &&
-            !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer.email)
-        ) {
-            showToast(
-                "Invalid email",
-                "Please enter a valid email address.",
-                "error"
-            );
-
-            $("#customer-email")?.focus();
-            return false;
-        }
-
-        return true;
+    if (
+      subtotal >= CONFIG.freeDeliveryMinimum ||
+      couponCode === "FREESHIP"
+    ) {
+      return 0;
     }
 
+    return CONFIG.deliveryFee;
+  }
 
-    /* ========================================================
-       14. PLACE ORDER
-    ======================================================== */
+  function calculateTax(subtotal = getSubtotal(), discount = calculateDiscount(subtotal)) {
+    return Math.max(0, subtotal - discount) * CONFIG.taxRate;
+  }
 
-    function placeOrder(event) {
-        event.preventDefault();
+  function calculateTotal() {
+    const subtotal = getSubtotal();
+    const discount = calculateDiscount(subtotal);
+    const delivery = calculateDelivery(subtotal);
+    const tax = calculateTax(subtotal, discount);
 
-        const form = $("#checkout-form");
+    return {
+      subtotal,
+      discount,
+      delivery,
+      tax,
+      total: Math.max(0, subtotal - discount + delivery + tax)
+    };
+  }
 
-        if (form && !form.reportValidity()) {
-            return;
-        }
+  /* ==========================================================
+     10. CART RENDERING
+  ========================================================== */
 
-        if (cart.length === 0) {
-            showToast(
-                "Your cart is empty",
-                "Add a product before placing an order.",
-                "warning"
-            );
+  function cartItemHTML(item) {
+    return `
+      <article class="cart-item" data-cart-id="${escapeHTML(item.id)}">
+        <img
+          class="cart-item-image"
+          src="${escapeHTML(item.image)}"
+          alt="${escapeHTML(item.name)}"
+          loading="lazy"
+        >
 
-            closeCheckout();
-            return;
-        }
+        <div class="cart-item-details">
+          <h4 class="cart-item-title">${escapeHTML(item.name)}</h4>
+          <p class="cart-item-price">${money(item.price)}</p>
 
-        /*
-         * Re-check product availability before creating the
-         * demo order. A real application must do this on server.
-         */
-        for (const item of cart) {
-            const product = findProduct(item.id);
+          <div class="cart-item-controls">
+            <button
+              type="button"
+              data-action="decrease-quantity"
+              data-id="${escapeHTML(item.id)}"
+              aria-label="Decrease ${escapeHTML(item.name)} quantity"
+            >−</button>
 
-            if (
-                !product ||
-                !product.available ||
-                product.stock < item.quantity
-            ) {
-                showToast(
-                    "Stock changed",
-                    `${product?.name || "An item"} is no longer available in that quantity.`,
-                    "error"
-                );
+            <span class="cart-item-quantity">${item.quantity}</span>
 
-                return;
-            }
-        }
+            <button
+              type="button"
+              data-action="increase-quantity"
+              data-id="${escapeHTML(item.id)}"
+              aria-label="Increase ${escapeHTML(item.name)} quantity"
+            >+</button>
+          </div>
+        </div>
 
-        const customer = getCustomerDetails();
+        <div class="cart-item-side">
+          <strong>${money(item.price * item.quantity)}</strong>
 
-        if (!validateCustomer(customer)) {
-            return;
-        }
+          <button
+            type="button"
+            class="cart-item-remove"
+            data-action="remove-from-cart"
+            data-id="${escapeHTML(item.id)}"
+            aria-label="Remove ${escapeHTML(item.name)} from cart"
+          >Remove</button>
+        </div>
+      </article>
+    `;
+  }
 
-        const subtotal = getSubtotal();
-        const delivery = getDeliveryFee(subtotal);
-        const tax = getTax(subtotal);
-        const discount = getCouponDiscount(subtotal);
-        const total = getTotal();
+  function setText(selector, value) {
+    const element = $(selector);
+    if (element) element.textContent = value;
+  }
 
-        const paymentMethod =
-            $('input[name="paymentMethod"]:checked')?.value || "cod";
+  function renderCart() {
+    const cartItemsElement = $("#cart-items");
+    const items = getCartItems();
 
-        const order = {
-            id: createId("CC"),
-            orderNumber: `CC${Date.now().toString().slice(-8)}`,
-            invoiceNumber: `INV-${new Date().getFullYear()}-${Math.random()
-                .toString(36)
-                .slice(2, 8)
-                .toUpperCase()}`,
-
-            createdAt: new Date().toISOString(),
-
-            status: "pending",
-            paymentMethod,
-            paymentStatus: "pending",
-
-            customer,
-
-            items: getCartProducts().map(item => ({
-                id: item.id,
-                name: item.name,
-                category: item.category,
-                image: item.image,
-                price: item.price,
-                quantity: item.quantity,
-                lineTotal: item.lineTotal
-            })),
-
-            subtotal,
-            delivery,
-            tax,
-            discount,
-            coupon: appliedCoupon,
-            total,
-
-            currency: CONFIG.currency
-        };
-
-        /*
-         * Reduce local demo stock.
-         * This is not a replacement for server-side inventory.
-         */
-        order.items.forEach(item => {
-            const product = findProduct(item.id);
-
-            if (product) {
-                product.stock = Math.max(
-                    0,
-                    product.stock - item.quantity
-                );
-            }
-        });
-
-        orders.unshift(order);
-
-        saveOrders();
-        saveProducts();
-        saveCustomerDetails(customer);
-
-        lastOrder = order;
-        writeStorage(CONFIG.storage.lastOrder, order);
-
-        cart = [];
-        appliedCoupon = null;
-
-        saveCart();
-        persistCoupon();
-
-        const couponInput = $("#coupon-code");
-
-        if (couponInput) {
-            couponInput.value = "";
-        }
-
-        closeCheckout();
-
-        renderProducts();
-        renderCart();
-        renderWishlist();
-
-        openInvoice(order);
-
-        showToast(
-            "Order placed!",
-            `Your demo order number is ${order.orderNumber}.`,
-            "success"
-        );
-
-        updateAppStatus(
-            `Order ${order.orderNumber} created successfully.`
-        );
+    if (cartItemsElement) {
+      cartItemsElement.innerHTML = items.length
+        ? items.map(cartItemHTML).join("")
+        : "";
     }
 
-
-    /* ========================================================
-       15. INVOICE RENDERING
-    ======================================================== */
-
-    function formatDate(dateValue) {
-        const date = new Date(dateValue);
-
-        if (Number.isNaN(date.getTime())) {
-            return "Date unavailable";
-        }
-
-        return new Intl.DateTimeFormat(CONFIG.locale, {
-            day: "2-digit",
-            month: "short",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit"
-        }).format(date);
+    const emptyState = $("#cart-empty-state");
+    if (emptyState) {
+      emptyState.hidden = items.length > 0;
     }
 
+    const quantity = getCartQuantity();
 
-    function renderInvoice(order) {
-        const container = $("#invoice-content");
+    setText("#cart-count", quantity);
+    setText("#cart-heading-count", quantity);
 
-        if (!container || !order) {
-            return;
-        }
+    const totals = calculateTotal();
 
-        const items = Array.isArray(order.items) ? order.items : [];
-        const customer = order.customer || {};
+    setText("#cart-subtotal", money(totals.subtotal));
+    setText("#cart-delivery", totals.delivery === 0 && totals.subtotal > 0
+      ? "FREE"
+      : money(totals.delivery));
+    setText("#cart-tax", money(totals.tax));
+    setText("#cart-discount", `−${money(totals.discount)}`);
+    setText("#cart-total", money(totals.total));
+    setText("#checkout-total", money(totals.total));
+    setText("#checkout-review-total", money(totals.total));
 
-        container.innerHTML = `
-            <div class="invoice-document" id="invoice-print-area">
-
-                <div class="invoice-brand-row">
-
-                    <div>
-                        <div class="invoice-brand-name">
-                            <span>Crave</span>Cart
-                        </div>
-
-                        <p class="invoice-brand-tagline">
-                            Vegetarian goodness, delivered.
-                        </p>
-                    </div>
-
-                    <span class="invoice-status-badge">
-                        ${safeText(order.status || "pending")}
-                    </span>
-
-                </div>
-
-                <div class="invoice-number-row">
-
-                    <div>
-                        <span>Order number</span>
-                        <strong>${safeText(order.orderNumber || order.id)}</strong>
-                    </div>
-
-                    <div>
-                        <span>Invoice number</span>
-                        <strong>${safeText(order.invoiceNumber || "Not assigned")}</strong>
-                    </div>
-
-                    <div>
-                        <span>Order date</span>
-                        <strong>${safeText(formatDate(order.createdAt))}</strong>
-                    </div>
-
-                </div>
-
-                <div class="invoice-customer-section">
-
-                    <h3>Delivery details</h3>
-
-                    <strong>${safeText(customer.name || "")}</strong>
-
-                    <p>${safeText(customer.phone || "")}</p>
-
-                    ${
-                        customer.email
-                            ? `<p>${safeText(customer.email)}</p>`
-                            : ""
-                    }
-
-                    <p>
-                        ${safeText(customer.address || "")}<br>
-                        ${safeText(customer.city || "")}
-                        ${customer.pincode ? ` — ${safeText(customer.pincode)}` : ""}
-                    </p>
-
-                </div>
-
-                <div class="invoice-items-section">
-
-                    <h3>Order items</h3>
-
-                    <div class="invoice-table-wrap">
-
-                        <table class="invoice-table">
-
-                            <thead>
-                                <tr>
-                                    <th>Item</th>
-                                    <th>Qty</th>
-                                    <th>Price</th>
-                                    <th>Total</th>
-                                </tr>
-                            </thead>
-
-                            <tbody>
-                                ${items.map(item => `
-                                    <tr>
-                                        <td>${safeText(item.name)}</td>
-                                        <td>${number(item.quantity)}</td>
-                                        <td>${money(item.price)}</td>
-                                        <td>${money(item.lineTotal)}</td>
-                                    </tr>
-                                `).join("")}
-                            </tbody>
-
-                        </table>
-
-                    </div>
-
-                </div>
-
-                <div class="invoice-summary">
-
-                    <div>
-                        <span>Subtotal</span>
-                        <strong>${money(order.subtotal)}</strong>
-                    </div>
-
-                    <div>
-                        <span>Delivery</span>
-                        <strong>${number(order.delivery) === 0 ? "FREE" : money(order.delivery)}</strong>
-                    </div>
-
-                    <div>
-                        <span>Tax (${Math.round(CONFIG.taxRate * 100)}% demo calculation)</span>
-                        <strong>${money(order.tax)}</strong>
-                    </div>
-
-                    ${
-                        number(order.discount) > 0
-                            ? `
-                                <div class="invoice-discount">
-                                    <span>
-                                        Discount
-                                        ${order.coupon ? `(${safeText(order.coupon)})` : ""}
-                                    </span>
-                                    <strong>-${money(order.discount)}</strong>
-                                </div>
-                            `
-                            : ""
-                    }
-
-                    <div class="invoice-grand-total">
-                        <span>Total paid / payable</span>
-                        <strong>${money(order.total)}</strong>
-                    </div>
-
-                </div>
-
-                <div class="invoice-payment-note">
-
-                    <i class="fa-solid fa-circle-info"></i>
-
-                    <p>
-                        Payment method: ${safeText(
-                            String(order.paymentMethod || "cod").toUpperCase()
-                        )}.
-                        This is a demo invoice generated by the CraveCart
-                        frontend; it is not a tax invoice issued by a registered seller.
-                    </p>
-
-                </div>
-
-                <div class="invoice-thank-you">
-                    <i class="fa-solid fa-heart"></i>
-                    Thank you for choosing CraveCart!
-                </div>
-
-            </div>
-        `;
+    const discountRow = $("#discount-row");
+    if (discountRow) {
+      discountRow.hidden = totals.discount <= 0;
     }
 
+    const deliveryProgressText = $("#delivery-progress-text");
+    const progressBar = $("#cart-progress-bar");
 
-    function buildInvoiceHTML(order) {
-        const items = Array.isArray(order.items) ? order.items : [];
-        const customer = order.customer || {};
+    if (deliveryProgressText && progressBar) {
+      const remaining = Math.max(
+        0,
+        CONFIG.freeDeliveryMinimum - totals.subtotal
+      );
 
-        const rows = items.map(item => `
-            <tr>
-                <td>${safeText(item.name)}</td>
-                <td>${number(item.quantity)}</td>
-                <td>${money(item.price)}</td>
-                <td>${money(item.lineTotal)}</td>
-            </tr>
-        `).join("");
+      if (totals.subtotal <= 0) {
+        deliveryProgressText.textContent =
+          `Add items worth ${money(CONFIG.freeDeliveryMinimum)} for free delivery`;
+      } else if (remaining > 0) {
+        deliveryProgressText.textContent =
+          `Add ${money(remaining)} more for free delivery`;
+      } else {
+        deliveryProgressText.textContent = "Congratulations! You unlocked free delivery.";
+      }
 
-        return `
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <title>CraveCart Invoice ${safeText(order.orderNumber)}</title>
+      const progress = Math.min(
+        100,
+        (totals.subtotal / CONFIG.freeDeliveryMinimum) * 100
+      );
 
-                <style>
-                    body {
-                        max-width: 850px;
-                        margin: 35px auto;
-                        padding: 24px;
-                        color: #222;
-                        font: 14px/1.6 Arial, sans-serif;
-                    }
-
-                    h1 {
-                        color: #e65e20;
-                    }
-
-                    table {
-                        width: 100%;
-                        border-collapse: collapse;
-                        margin-top: 25px;
-                    }
-
-                    th, td {
-                        padding: 11px;
-                        border-bottom: 1px solid #ddd;
-                        text-align: left;
-                    }
-
-                    .totals {
-                        max-width: 350px;
-                        margin: 25px 0 0 auto;
-                    }
-
-                    .totals p {
-                        display: flex;
-                        justify-content: space-between;
-                    }
-
-                    .grand-total {
-                        padding-top: 12px;
-                        border-top: 2px solid #222;
-                        font-size: 19px;
-                        font-weight: bold;
-                    }
-
-                    .note {
-                        margin-top: 30px;
-                        padding: 12px;
-                        background: #f4f4f4;
-                        font-size: 12px;
-                    }
-
-                    @media print {
-                        body {
-                            margin: 0;
-                            padding: 10px;
-                        }
-                    }
-                </style>
-            </head>
-
-            <body>
-
-                <h1>CraveCart</h1>
-                <p>Vegetarian goodness, delivered.</p>
-
-                <h2>Order invoice</h2>
-
-                <p><strong>Order:</strong> ${safeText(order.orderNumber)}</p>
-                <p><strong>Invoice:</strong> ${safeText(order.invoiceNumber)}</p>
-                <p><strong>Date:</strong> ${safeText(formatDate(order.createdAt))}</p>
-                <p><strong>Status:</strong> ${safeText(order.status)}</p>
-
-                <h3>Customer</h3>
-                <p>${safeText(customer.name)}</p>
-                <p>${safeText(customer.phone)}</p>
-                <p>${safeText(customer.email)}</p>
-                <p>
-                    ${safeText(customer.address)}<br>
-                    ${safeText(customer.city)}
-                    ${safeText(customer.pincode)}
-                </p>
-
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Item</th>
-                            <th>Quantity</th>
-                            <th>Price</th>
-                            <th>Total</th>
-                        </tr>
-                    </thead>
-                    <tbody>${rows}</tbody>
-                </table>
-
-                <div class="totals">
-                    <p><span>Subtotal</span><strong>${money(order.subtotal)}</strong></p>
-                    <p><span>Delivery</span><strong>${money(order.delivery)}</strong></p>
-                    <p><span>Tax</span><strong>${money(order.tax)}</strong></p>
-                    <p><span>Discount</span><strong>-${money(order.discount)}</strong></p>
-                    <p class="grand-total"><span>Total</span><strong>${money(order.total)}</strong></p>
-                </div>
-
-                <div class="note">
-                    Demo invoice only. This is not a tax invoice from a
-                    registered seller. Tax and payment details are illustrative.
-                </div>
-
-            </body>
-            </html>
-        `;
+      progressBar.style.width = `${progress}%`;
+      progressBar.setAttribute("aria-valuenow", String(Math.round(progress)));
     }
 
-
-    function downloadInvoice() {
-        const order = invoiceOrder || lastOrder;
-
-        if (!order) {
-            showToast(
-                "No invoice available",
-                "Place a demo order first.",
-                "warning"
-            );
-            return;
-        }
-
-        /*
-         * If jsPDF has been added to index.html, use it.
-         * Otherwise download a printable HTML invoice.
-         */
-        const jsPDF = window.jspdf?.jsPDF;
-
-        if (jsPDF) {
-            const doc = new jsPDF();
-
-            let y = 18;
-
-            doc.setFontSize(20);
-            doc.text("CraveCart Invoice", 14, y);
-
-            y += 12;
-
-            doc.setFontSize(10);
-            doc.text(`Order: ${order.orderNumber}`, 14, y);
-            y += 7;
-
-            doc.text(`Invoice: ${order.invoiceNumber}`, 14, y);
-            y += 7;
-
-            doc.text(`Date: ${formatDate(order.createdAt)}`, 14, y);
-            y += 7;
-
-            doc.text(`Customer: ${order.customer?.name || ""}`, 14, y);
-            y += 12;
-
-            doc.setFontSize(11);
-            doc.text("Items", 14, y);
-            y += 8;
-
-            doc.setFontSize(9);
-
-            for (const item of order.items || []) {
-                if (y > 260) {
-                    doc.addPage();
-                    y = 18;
-                }
-
-                const line =
-                    `${item.name} x ${item.quantity} — ${money(item.lineTotal)}`;
-
-                doc.text(line.slice(0, 100), 14, y);
-                y += 7;
-            }
-
-            y += 6;
-
-            if (y > 260) {
-                doc.addPage();
-                y = 18;
-            }
-
-            doc.text(`Subtotal: ${money(order.subtotal)}`, 14, y);
-            y += 7;
-
-            doc.text(`Delivery: ${money(order.delivery)}`, 14, y);
-            y += 7;
-
-            doc.text(`Tax: ${money(order.tax)}`, 14, y);
-            y += 7;
-
-            doc.text(`Discount: -${money(order.discount)}`, 14, y);
-            y += 9;
-
-            doc.setFontSize(13);
-            doc.text(`Total: ${money(order.total)}`, 14, y);
-
-            y += 12;
-
-            doc.setFontSize(8);
-            doc.text(
-                "Demo invoice only; not a registered seller's tax invoice.",
-                14,
-                Math.min(y, 285)
-            );
-
-            doc.save(`${order.invoiceNumber || order.orderNumber}.pdf`);
-
-            showToast(
-                "Invoice downloaded",
-                "Your PDF invoice is ready.",
-                "success"
-            );
-
-            return;
-        }
-
-        const html = buildInvoiceHTML(order);
-        const blob = new Blob([html], {
-            type: "text/html;charset=utf-8"
-        });
-
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-
-        link.href = url;
-        link.download = `${order.invoiceNumber || order.orderNumber}.html`;
-
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-
-        URL.revokeObjectURL(url);
-
-        showToast(
-            "Invoice downloaded",
-            "HTML invoice downloaded. Open it and use Print → Save as PDF.",
-            "success"
-        );
+    const couponMessage = $("#coupon-message");
+    if (couponMessage && activeCoupon?.code) {
+      couponMessage.textContent = `Coupon ${activeCoupon.code} applied.`;
+      couponMessage.classList.add("is-success");
     }
 
+    renderCartClearButton();
+  }
 
-    function printInvoice() {
-        const order = invoiceOrder || lastOrder;
+  function renderCartClearButton() {
+    const cartDrawer = $("#cart-drawer");
+    const cartItemsElement = $("#cart-items");
 
-        if (!order) {
-            showToast(
-                "No invoice available",
-                "Place a demo order first.",
-                "warning"
-            );
-            return;
-        }
+    if (!cartDrawer || !cartItemsElement) return;
 
-        const printWindow = window.open("", "_blank");
+    let clearButton = $("#clear-cart-button");
 
-        if (!printWindow) {
-            showToast(
-                "Popup blocked",
-                "Allow popups to print the invoice, or use Download Invoice.",
-                "warning"
-            );
-            return;
-        }
+    if (!clearButton && cart.length > 0) {
+      clearButton = document.createElement("button");
+      clearButton.id = "clear-cart-button";
+      clearButton.type = "button";
+      clearButton.className = "clear-cart-button";
+      clearButton.dataset.action = "clear-cart";
+      clearButton.textContent = "Clear cart";
 
-        printWindow.document.open();
-        printWindow.document.write(buildInvoiceHTML(order));
-        printWindow.document.close();
-
-        printWindow.onload = () => {
-            printWindow.focus();
-            printWindow.print();
-        };
+      cartItemsElement.before(clearButton);
     }
 
+    if (clearButton) {
+      clearButton.hidden = cart.length === 0;
+    }
+  }
 
-    /* ========================================================
-       16. SEARCH PANEL
-    ======================================================== */
+  function addToCart(productId, quantity = 1) {
+    const product = getProduct(productId);
 
-    function openSearch() {
-        const panel = $("#search-panel");
-
-        if (!panel) {
-            $("#product-search")?.focus();
-            scrollToSection("#products");
-            return;
-        }
-
-        panel.hidden = false;
-        panel.classList.add("is-open", "active");
-
-        const input = $("#product-search");
-
-        window.setTimeout(() => input?.focus(), 50);
+    if (!product || !product.available || product.stock <= 0) {
+      showToast("Sorry, this product is currently unavailable.", "error");
+      return;
     }
 
+    const existingItem = cart.find((item) => item.id === product.id);
+    const nextQuantity = (existingItem?.quantity || 0) + quantity;
 
-    function closeSearch() {
-        const panel = $("#search-panel");
-
-        if (!panel) {
-            return;
-        }
-
-        panel.hidden = true;
-        panel.classList.remove("is-open", "active");
+    if (nextQuantity > product.stock) {
+      showToast(`Only ${product.stock} unit(s) available.`, "warning");
+      return;
     }
 
-
-    function handleSearchInput(event) {
-        searchTerm = event.target.value.trim();
-
-        renderProducts();
-    }
-
-
-    function clearSearch() {
-        const input = $("#product-search");
-
-        if (input) {
-            input.value = "";
-        }
-
-        searchTerm = "";
-
-        renderProducts();
-    }
-
-
-    /* ========================================================
-       17. MOBILE MENU
-    ======================================================== */
-
-    function openMobileMenu() {
-        const menu = $("#mobile-navigation");
-
-        if (!menu) {
-            return;
-        }
-
-        menu.hidden = false;
-        menu.classList.add("is-open", "active");
-
-        const toggle = $("#mobile-menu-toggle");
-
-        if (toggle) {
-            toggle.setAttribute("aria-expanded", "true");
-        }
-    }
-
-
-    function closeMobileMenu() {
-        const menu = $("#mobile-navigation");
-
-        if (!menu) {
-            return;
-        }
-
-        menu.hidden = true;
-        menu.classList.remove("is-open", "active");
-
-        const toggle = $("#mobile-menu-toggle");
-
-        if (toggle) {
-            toggle.setAttribute("aria-expanded", "false");
-        }
-    }
-
-
-    function toggleMobileMenu() {
-        const menu = $("#mobile-navigation");
-
-        if (!menu) {
-            return;
-        }
-
-        if (menu.hidden) {
-            openMobileMenu();
-        } else {
-            closeMobileMenu();
-        }
-    }
-
-
-    /* ========================================================
-       18. NEWSLETTER DEMO
-    ======================================================== */
-
-    function handleNewsletter(event) {
-        event.preventDefault();
-
-        const input = $("#newsletter-email");
-        const message = $("#newsletter-message");
-
-        if (!input || !input.value.trim()) {
-            showToast(
-                "Email required",
-                "Enter your email address to continue.",
-                "warning"
-            );
-            return;
-        }
-
-        const email = input.value.trim();
-
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-            showToast(
-                "Invalid email",
-                "Please enter a valid email address.",
-                "error"
-            );
-            return;
-        }
-
-        /*
-         * Demo only. A real newsletter requires an email service
-         * or a backend endpoint and consent handling.
-         */
-        const subscribers = readStorage("cravecart_newsletter_demo", []);
-
-        if (!subscribers.includes(email)) {
-            subscribers.push(email);
-
-            writeStorage(
-                "cravecart_newsletter_demo",
-                subscribers
-            );
-        }
-
-        if (message) {
-            message.textContent =
-                "Thanks for subscribing! This is a local demo signup.";
-
-            message.classList.add("success");
-        }
-
-        input.value = "";
-
-        showToast(
-            "You're on the list!",
-            "Demo signup saved in this browser.",
-            "success"
-        );
-    }
-
-
-    /* ========================================================
-       19. PRODUCT SORTING
-    ======================================================== */
-
-    function handleSortChange(event) {
-        sortMode = event.target.value || "featured";
-        renderProducts();
-    }
-
-
-    /* ========================================================
-       20. PAYMENT OPTION UI
-    ======================================================== */
-
-    function updatePaymentSelection() {
-        $$(".payment-option").forEach(option => {
-            const radio = $('input[type="radio"]', option);
-
-            option.classList.toggle(
-                "selected",
-                Boolean(radio?.checked)
-            );
-        });
-    }
-
-
-    /* ========================================================
-       21. BACK TO TOP
-    ======================================================== */
-
-    function updateBackToTop() {
-        const button = $("#back-to-top");
-
-        if (!button) {
-            return;
-        }
-
-        const visible = window.scrollY > 500;
-
-        button.classList.toggle("visible", visible);
-        button.classList.toggle("active", visible);
-        button.setAttribute("aria-hidden", String(!visible));
-    }
-
-
-    function scrollToTop() {
-        window.scrollTo({
-            top: 0,
-            behavior: "smooth"
-        });
-    }
-
-
-    /* ========================================================
-       22. HEADER SCROLL EFFECT
-    ======================================================== */
-
-    function updateHeaderOnScroll() {
-        const header = $("#site-header");
-
-        if (!header) {
-            return;
-        }
-
-        header.classList.toggle(
-            "is-scrolled",
-            window.scrollY > 20
-        );
-    }
-
-
-    /* ========================================================
-       23. CLICK EVENT DELEGATION
-    ======================================================== */
-
-    function handleDocumentClick(event) {
-        const actionElement = event.target.closest("[data-action]");
-
-        if (actionElement) {
-            const action = actionElement.dataset.action;
-            const id = actionElement.dataset.id;
-
-            switch (action) {
-                case "add-to-cart":
-                    addToCart(id);
-                    return;
-
-                case "toggle-wishlist":
-                    toggleWishlist(id);
-                    return;
-
-                case "open-cart":
-                    openCart();
-                    return;
-
-                case "close-cart":
-                    closeCart();
-                    return;
-
-                case "open-wishlist":
-                    openWishlist();
-                    return;
-
-                case "close-wishlist":
-                    closeWishlist();
-                    return;
-
-                case "checkout":
-                    openCheckout();
-                    return;
-
-                case "close-checkout":
-                    closeCheckout();
-                    return;
-
-                case "close-invoice":
-                    closeInvoice();
-                    return;
-
-                case "increase-quantity":
-                    changeCartQuantity(id, 1);
-                    return;
-
-                case "decrease-quantity":
-                    changeCartQuantity(id, -1);
-                    return;
-
-                case "remove-cart-item":
-                    removeFromCart(id);
-                    return;
-
-                case "wishlist-add-to-cart":
-                    addToCart(id);
-                    openCart();
-                    return;
-
-                case "clear-category":
-                    activeCategory = "all";
-                    updateCategoryButtons();
-                    renderProducts();
-                    return;
-
-                case "clear-search":
-                    clearSearch();
-                    return;
-
-                case "clear-cart":
-                    clearCart();
-                    return;
-
-                case "remove-coupon":
-                    removeCoupon();
-                    return;
-
-                default:
-                    break;
-            }
-        }
-
-        const categoryButton = event.target.closest(
-            "#category-list [data-category]"
-        );
-
-        if (categoryButton) {
-            selectCategory(categoryButton.dataset.category);
-            return;
-        }
-
-        const mobileLink = event.target.closest(
-            "#mobile-navigation a"
-        );
-
-        if (mobileLink) {
-            closeMobileMenu();
-            return;
-        }
-
-        if (event.target.closest("#cart-overlay")) {
-            closeCart();
-            return;
-        }
-
-        if (event.target.closest("#wishlist-overlay")) {
-            closeWishlist();
-            return;
-        }
-
-        if (event.target.closest("#checkout-overlay")) {
-            closeCheckout();
-            return;
-        }
-
-        if (event.target.closest("#invoice-overlay")) {
-            closeInvoice();
-        }
-    }
-
-
-    /* ========================================================
-       24. KEYBOARD ACCESSIBILITY
-    ======================================================== */
-
-    function handleKeydown(event) {
-        if (event.key === "Escape") {
-            closeAllPanels();
-        }
-
-        /*
-         * Basic modal focus containment.
-         * Production applications should use a full, tested
-         * focus-trap implementation for every modal.
-         */
-        if (event.key === "Tab") {
-            const openModal = [
-                $("#cart-drawer"),
-                $("#wishlist-modal"),
-                $("#checkout-modal"),
-                $("#invoice-modal")
-            ].find(element =>
-                element &&
-                !element.hidden &&
-                element.getAttribute("aria-hidden") === "false"
-            );
-
-            if (!openModal) {
-                return;
-            }
-
-            const focusable = $$(
-                'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-                openModal
-            ).filter(element => element.offsetParent !== null);
-
-            if (focusable.length === 0) {
-                return;
-            }
-
-            const first = focusable[0];
-            const last = focusable[focusable.length - 1];
-
-            if (event.shiftKey && document.activeElement === first) {
-                event.preventDefault();
-                last.focus();
-            } else if (
-                !event.shiftKey &&
-                document.activeElement === last
-            ) {
-                event.preventDefault();
-                first.focus();
-            }
-        }
-    }
-
-
-    /* ========================================================
-       25. NEWSLETTER / FORM SUBMISSION
-    ======================================================== */
-
-    function attachFormEvents() {
-        $("#checkout-form")?.addEventListener("submit", placeOrder);
-
-        $("#newsletter-form")?.addEventListener(
-            "submit",
-            handleNewsletter
-        );
-
-        $("#apply-coupon")?.addEventListener("click", applyCoupon);
-
-        $("#coupon-code")?.addEventListener("keydown", event => {
-            if (event.key === "Enter") {
-                event.preventDefault();
-                applyCoupon();
-            }
-        });
-
-        $("#print-invoice")?.addEventListener("click", printInvoice);
-
-        $("#download-invoice")?.addEventListener(
-            "click",
-            downloadInvoice
-        );
-
-        $("#product-search")?.addEventListener(
-            "input",
-            handleSearchInput
-        );
-
-        $("#sort-products")?.addEventListener(
-            "change",
-            handleSortChange
-        );
-
-        $("#search-toggle")?.addEventListener("click", () => {
-            const panel = $("#search-panel");
-
-            if (panel && !panel.hidden) {
-                closeSearch();
-            } else {
-                openSearch();
-            }
-        });
-
-        $("#clear-search")?.addEventListener("click", clearSearch);
-
-        $("#mobile-menu-toggle")?.addEventListener(
-            "click",
-            toggleMobileMenu
-        );
-
-        $("#reset-filters")?.addEventListener(
-            "click",
-            resetFilters
-        );
-
-        $("#show-all-products")?.addEventListener("click", () => {
-            activeCategory = "all";
-            searchTerm = "";
-
-            if ($("#product-search")) {
-                $("#product-search").value = "";
-            }
-
-            if ($("#sort-products")) {
-                $("#sort-products").value = "featured";
-            }
-
-            sortMode = "featured";
-
-            updateCategoryButtons();
-            renderProducts();
-
-            scrollToSection("#products");
-        });
-
-        $("#back-to-top")?.addEventListener("click", scrollToTop);
-
-        $("#checkout-form")?.addEventListener("change", event => {
-            if (event.target.matches('input[name="paymentMethod"]')) {
-                updatePaymentSelection();
-            }
-        });
-
-        $("#cart-items")?.addEventListener("click", handleCartItemClick);
-    }
-
-
-    function handleCartItemClick(event) {
-        /*
-         * The global delegated handler already handles cart actions.
-         * This listener intentionally remains available if the cart
-         * template is later separated into its own component.
-         */
-    }
-
-
-    /* ========================================================
-       26. NAVIGATION HELPERS
-    ======================================================== */
-
-    function attachNavigationEvents() {
-        $$(".main-navigation a, .mobile-navigation a").forEach(link => {
-            link.addEventListener("click", () => {
-                closeMobileMenu();
-                closeSearch();
-            });
-        });
-
-        $$('a[href^="#"]').forEach(link => {
-            link.addEventListener("click", event => {
-                const targetId = link.getAttribute("href");
-
-                if (!targetId || targetId === "#") {
-                    return;
-                }
-
-                const target = $(targetId);
-
-                if (!target) {
-                    return;
-                }
-
-                event.preventDefault();
-
-                target.scrollIntoView({
-                    behavior: "smooth",
-                    block: "start"
-                });
-
-                if (history.replaceState) {
-                    history.replaceState(null, "", targetId);
-                }
-            });
-        });
-    }
-
-
-    /* ========================================================
-       27. SCROLL EFFECTS
-    ======================================================== */
-
-    function attachScrollEvents() {
-        window.addEventListener(
-            "scroll",
-            () => {
-                updateBackToTop();
-                updateHeaderOnScroll();
-            },
-            { passive: true }
-        );
-
-        updateBackToTop();
-        updateHeaderOnScroll();
-    }
-
-
-    /* ========================================================
-       28. INITIALISE YEAR
-    ======================================================== */
-
-    function updateCurrentYear() {
-        setText("#current-year", String(new Date().getFullYear()));
-    }
-
-
-    /* ========================================================
-       29. INITIALISE APP
-    ======================================================== */
-
-    function init() {
-        loadProducts();
-        loadCart();
-        loadWishlist();
-        loadOrders();
-        loadCoupon();
-
-        lastOrder = readStorage(CONFIG.storage.lastOrder, null);
-
-        updateCurrentYear();
-
-        updateCategoryButtons();
-
-        renderProducts();
-        renderCart();
-        renderWishlist();
-
-        attachFormEvents();
-        attachNavigationEvents();
-        attachScrollEvents();
-
-        document.addEventListener("click", handleDocumentClick);
-        document.addEventListener("keydown", handleKeydown);
-
-        /*
-         * Hide the initial HTML loading placeholder once the
-         * product catalogue has rendered.
-         */
-        const grid = $("#products-grid");
-
-        if (grid) {
-            grid.setAttribute("aria-live", "polite");
-        }
-
-        console.info(
-            `CraveCart ready: ${products.length} products loaded.`
-        );
-
-        updateAppStatus(
-            `CraveCart loaded with ${products.length} vegetarian products.`
-        );
-    }
-
-
-    /* ========================================================
-       30. GLOBAL HELPERS FOR IMAGE FALLBACK
-
-       These functions are exposed only because the HTML uses
-       onerror="imageFallback(this)" for remote product images.
-    ======================================================== */
-
-    window.imageFallback = imageFallback;
-
-
-    /* ========================================================
-       31. START
-    ======================================================== */
-
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", init, {
-            once: true
-        });
+    if (existingItem) {
+      existingItem.quantity = nextQuantity;
     } else {
-        init();
+      cart.push({
+        id: product.id,
+        quantity: Math.max(1, quantity)
+      });
     }
 
+    saveState();
+    renderCart();
 
-    /* ========================================================
-       32. OPTIONAL DEBUG API
+    showToast(`${product.name} added to your cart.`);
+  }
 
-       Useful for learning and debugging in browser DevTools.
-       Do not expose this debug API in a production build.
-    ======================================================== */
+  function changeCartQuantity(productId, change) {
+    const item = cart.find((cartItem) => cartItem.id === productId);
+    const product = getProduct(productId);
 
-    window.CraveCartDemo = {
-        getProducts: () => products.map(product => ({ ...product })),
-        getCart: () => getCartProducts(),
-        getWishlist: () => [...wishlist],
-        getOrders: () => [...orders],
-        getTotal,
-        resetFilters,
-        clearCart
+    if (!item || !product) return;
+
+    const nextQuantity = item.quantity + change;
+
+    if (nextQuantity <= 0) {
+      removeFromCart(productId);
+      return;
+    }
+
+    if (nextQuantity > product.stock) {
+      showToast(`Only ${product.stock} unit(s) available.`, "warning");
+      return;
+    }
+
+    item.quantity = nextQuantity;
+
+    saveState();
+    renderCart();
+  }
+
+  function removeFromCart(productId) {
+    const product = getProduct(productId);
+
+    cart = cart.filter((item) => item.id !== productId);
+
+    saveState();
+    renderCart();
+
+    if (product) {
+      showToast(`${product.name} removed from cart.`, "success");
+    }
+  }
+
+  function clearCart() {
+    if (!cart.length) return;
+
+    cart = [];
+    activeCoupon = null;
+
+    saveState();
+    renderCart();
+
+    showToast("Your cart has been cleared.");
+  }
+
+  /* ==========================================================
+     11. COUPONS
+  ========================================================== */
+
+  function applyCoupon() {
+    const input = $("#coupon-code");
+    const message = $("#coupon-message");
+
+    if (!input) return;
+
+    const code = input.value.trim().toUpperCase();
+
+    if (!code) {
+      showCouponMessage("Enter a coupon code first.", "error");
+      return;
+    }
+
+    const coupon = COUPONS[code];
+
+    if (!coupon) {
+      showCouponMessage("Invalid coupon code.", "error");
+      return;
+    }
+
+    const subtotal = getSubtotal();
+
+    if (subtotal < coupon.minimum) {
+      showCouponMessage(
+        `Add items worth ${money(coupon.minimum - subtotal)} more to use this coupon.`,
+        "error"
+      );
+      return;
+    }
+
+    activeCoupon = {
+      code,
+      appliedAt: new Date().toISOString()
     };
 
+    saveState();
+    renderCart();
+
+    showCouponMessage(coupon.description, "success");
+    showToast(`Coupon ${code} applied successfully.`);
+  }
+
+  function showCouponMessage(messageText, type = "success") {
+    const element = $("#coupon-message");
+    if (!element) return;
+
+    element.textContent = messageText;
+    element.classList.toggle("is-success", type === "success");
+    element.classList.toggle("is-error", type === "error");
+  }
+
+  /* ==========================================================
+     12. WISHLIST
+  ========================================================== */
+
+  function toggleWishlist(productId) {
+    const product = getProduct(productId);
+    if (!product) return;
+
+    const exists = wishlist.includes(productId);
+
+    if (exists) {
+      wishlist = wishlist.filter((id) => id !== productId);
+      showToast(`${product.name} removed from favourites.`);
+    } else {
+      wishlist.push(productId);
+      showToast(`${product.name} added to favourites.`);
+    }
+
+    saveState();
+    renderProducts();
+    renderWishlist();
+    updateWishlistCount();
+  }
+
+  function updateWishlistCount() {
+    setText("#wishlist-count", wishlist.length);
+  }
+
+  function wishlistItemHTML(product) {
+    return `
+      <article class="wishlist-item" data-wishlist-id="${escapeHTML(product.id)}">
+        <img
+          class="wishlist-item-image"
+          src="${escapeHTML(product.image)}"
+          alt="${escapeHTML(product.name)}"
+          loading="lazy"
+        >
+
+        <div class="wishlist-item-details">
+          <h4>${escapeHTML(product.name)}</h4>
+          <p>${money(product.price)}</p>
+
+          <div class="wishlist-item-actions">
+            <button
+              type="button"
+              data-action="wishlist-add-to-cart"
+              data-id="${escapeHTML(product.id)}"
+            >Add to Cart</button>
+
+            <button
+              type="button"
+              data-action="remove-from-wishlist"
+              data-id="${escapeHTML(product.id)}"
+            >Remove</button>
+          </div>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderWishlist() {
+    const wishlistElement = $("#wishlist-items");
+    if (!wishlistElement) return;
+
+    const items = wishlist
+      .map((id) => getProduct(id))
+      .filter(Boolean);
+
+    wishlistElement.innerHTML = items.length
+      ? items.map(wishlistItemHTML).join("")
+      : `
+        <div class="wishlist-empty">
+          <div aria-hidden="true">♡</div>
+          <h3>Your wishlist is empty</h3>
+          <p>Save your favourite vegetarian dishes here.</p>
+        </div>
+      `;
+
+    updateWishlistCount();
+  }
+
+  function removeFromWishlist(productId) {
+    wishlist = wishlist.filter((id) => id !== productId);
+
+    saveState();
+    renderProducts();
+    renderWishlist();
+
+    showToast("Removed from favourites.");
+  }
+
+  /* ==========================================================
+     13. DRAWERS AND MODALS
+  ========================================================== */
+
+  function showElement(element) {
+    if (!element) return;
+
+    element.hidden = false;
+    element.removeAttribute("inert");
+    element.setAttribute("aria-hidden", "false");
+
+    element.classList.add("is-open", "open", "active", "show");
+  }
+
+  function hideElement(element) {
+    if (!element) return;
+
+    element.classList.remove("is-open", "open", "active", "show");
+    element.setAttribute("aria-hidden", "true");
+    element.setAttribute("inert", "");
+
+    element.hidden = true;
+  }
+
+  function openCart() {
+    const drawer = $("#cart-drawer");
+    const overlay = $("#cart-overlay");
+
+    if (drawer) {
+      drawer.hidden = false;
+      drawer.removeAttribute("inert");
+      drawer.setAttribute("aria-hidden", "false");
+      drawer.classList.add("is-open", "open", "active", "show");
+    }
+
+    if (overlay) {
+      overlay.hidden = false;
+      overlay.classList.add("is-open", "open", "active", "show");
+      overlay.setAttribute("aria-hidden", "false");
+    }
+
+    document.body.classList.add("cart-open");
+    renderCart();
+  }
+
+  function closeCart() {
+    hideElement($("#cart-drawer"));
+    hideElement($("#cart-overlay"));
+    document.body.classList.remove("cart-open");
+  }
+
+  function openWishlist() {
+    const modal = $("#wishlist-modal");
+    const overlay = $("#wishlist-overlay");
+
+    showElement(modal);
+    showElement(overlay);
+
+    if (modal) {
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+    }
+
+    document.body.classList.add("modal-open");
+    renderWishlist();
+  }
+
+  function closeWishlist() {
+    hideElement($("#wishlist-modal"));
+    hideElement($("#wishlist-overlay"));
+    document.body.classList.remove("modal-open");
+  }
+
+  function openCheckout() {
+    const totals = calculateTotal();
+
+    if (!cart.length) {
+      showToast("Your cart is empty. Add something delicious first.", "warning");
+      return;
+    }
+
+    if (totals.subtotal < CONFIG.minimumOrder) {
+      showToast(
+        `Minimum order amount is ${money(CONFIG.minimumOrder)}.`,
+        "warning"
+      );
+      return;
+    }
+
+    closeCart();
+
+    showElement($("#checkout-modal"));
+    showElement($("#checkout-overlay"));
+
+    const checkoutModal = $("#checkout-modal");
+
+    if (checkoutModal) {
+      checkoutModal.setAttribute("role", "dialog");
+      checkoutModal.setAttribute("aria-modal", "true");
+    }
+
+    document.body.classList.add("modal-open");
+    renderCart();
+  }
+
+  function closeCheckout() {
+    hideElement($("#checkout-modal"));
+    hideElement($("#checkout-overlay"));
+    document.body.classList.remove("modal-open");
+  }
+
+  function openInvoice(order = lastOrder) {
+    if (!order) {
+      showToast("No invoice is available yet.", "warning");
+      return;
+    }
+
+    lastOrder = order;
+    writeStorage(CONFIG.storage.lastOrder, lastOrder);
+
+    const invoiceContent = $("#invoice-content");
+
+    if (invoiceContent) {
+      invoiceContent.innerHTML = invoiceHTML(order);
+    }
+
+    showElement($("#invoice-modal"));
+
+    document.body.classList.add("modal-open");
+  }
+
+  function closeInvoice() {
+    hideElement($("#invoice-modal"));
+    document.body.classList.remove("modal-open");
+  }
+
+  /* ==========================================================
+     14. INVOICE GENERATION
+  ========================================================== */
+
+  function invoiceHTML(order) {
+    const items = Array.isArray(order.items) ? order.items : [];
+
+    const rows = items.map((item) => `
+      <tr>
+        <td>${escapeHTML(item.name)}</td>
+        <td>${number(item.quantity)}</td>
+        <td>${money(item.price)}</td>
+        <td>${money(number(item.price) * number(item.quantity))}</td>
+      </tr>
+    `).join("");
+
+    const customer = order.customer || {};
+    const totals = order.totals || {};
+
+    return `
+      <div class="invoice-document">
+        <header class="invoice-header">
+          <div>
+            <h2>CRAVE<span>CART</span></h2>
+            <p>Fresh vegetarian food, delivered with love.</p>
+          </div>
+
+          <div class="invoice-meta">
+            <h3>INVOICE</h3>
+            <p><strong>Invoice:</strong> ${escapeHTML(order.invoiceNumber || order.id)}</p>
+            <p><strong>Order ID:</strong> ${escapeHTML(order.id)}</p>
+            <p><strong>Date:</strong> ${escapeHTML(formatDate(order.createdAt))}</p>
+          </div>
+        </header>
+
+        <hr>
+
+        <section class="invoice-customer">
+          <h3>Bill To</h3>
+          <p><strong>${escapeHTML(customer.name || "Customer")}</strong></p>
+          <p>${escapeHTML(customer.address || "")}</p>
+          <p>${escapeHTML(customer.city || "")} ${escapeHTML(customer.pincode || "")}</p>
+          <p>Phone: ${escapeHTML(customer.phone || "")}</p>
+          <p>Email: ${escapeHTML(customer.email || "")}</p>
+        </section>
+
+        <div class="invoice-table-wrap">
+          <table class="invoice-table">
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th>Qty</th>
+                <th>Price</th>
+                <th>Amount</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+
+        <div class="invoice-totals">
+          <p><span>Subtotal</span><strong>${money(totals.subtotal)}</strong></p>
+          <p><span>Discount</span><strong>−${money(totals.discount)}</strong></p>
+          <p><span>Delivery</span><strong>${money(totals.delivery)}</strong></p>
+          <p><span>Tax</span><strong>${money(totals.tax)}</strong></p>
+          <p class="invoice-grand-total"><span>Total</span><strong>${money(totals.total)}</strong></p>
+        </div>
+
+        <div class="invoice-payment">
+          <p><strong>Payment method:</strong> ${escapeHTML(order.paymentMethod || "Cash on Delivery")}</p>
+          <p><strong>Order status:</strong> ${escapeHTML(order.status || "Pending")}</p>
+        </div>
+
+        <footer class="invoice-footer">
+          <h3>Thank you for choosing CraveCart!</h3>
+          <p>This invoice was generated by the CraveCart demo website.</p>
+          <p>Vegetarian food only • Freshness in every bite</p>
+        </footer>
+      </div>
+    `;
+  }
+
+  function printInvoice() {
+    if (!lastOrder) {
+      showToast("Create an order first.", "warning");
+      return;
+    }
+
+    const invoiceContent = $("#invoice-content");
+
+    if (!invoiceContent) {
+      window.print();
+      return;
+    }
+
+    const printWindow = window.open("", "_blank", "width=900,height=700");
+
+    if (!printWindow) {
+      showToast("Allow pop-ups to print the invoice.", "warning");
+      return;
+    }
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>CraveCart Invoice</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            color: #222;
+            max-width: 900px;
+            margin: 25px auto;
+            padding: 20px;
+          }
+          h2 { letter-spacing: 2px; }
+          h2 span { color: #f36a21; }
+          .invoice-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 25px;
+          }
+          .invoice-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 25px;
+          }
+          .invoice-table th, .invoice-table td {
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+            text-align: left;
+          }
+          .invoice-totals {
+            max-width: 350px;
+            margin: 25px 0 25px auto;
+          }
+          .invoice-totals p {
+            display: flex;
+            justify-content: space-between;
+          }
+          .invoice-grand-total {
+            border-top: 2px solid #222;
+            padding-top: 10px;
+            font-size: 20px;
+          }
+          .invoice-footer {
+            text-align: center;
+            margin-top: 50px;
+          }
+          @media print {
+            body { margin: 0; padding: 10px; }
+          }
+        </style>
+      </head>
+      <body>
+        ${invoiceContent.innerHTML}
+        <script>
+          window.onload = function() {
+            window.print();
+          };
+        <\/script>
+      </body>
+      </html>
+    `);
+
+    printWindow.document.close();
+  }
+
+  function downloadInvoice() {
+    if (!lastOrder) {
+      showToast("Create an order before downloading an invoice.", "warning");
+      return;
+    }
+
+    const html = `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <title>CraveCart Invoice</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 30px; color: #222; }
+          h2 span { color: #f36a21; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+          th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }
+          .invoice-totals { max-width: 350px; margin-left: auto; }
+          .invoice-totals p { display: flex; justify-content: space-between; }
+          .invoice-grand-total { border-top: 2px solid #222; padding-top: 10px; }
+        </style>
+      </head>
+      <body>
+        ${invoiceHTML(lastOrder)}
+      </body>
+      </html>
+    `;
+
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+
+    anchor.href = url;
+    anchor.download = `CraveCart-Invoice-${lastOrder.invoiceNumber || lastOrder.id}.html`;
+
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+
+    URL.revokeObjectURL(url);
+
+    showToast("Invoice downloaded. Open it in your browser to print or save as PDF.");
+  }
+
+  /* ==========================================================
+     15. CHECKOUT AND ORDER CREATION
+  ========================================================== */
+
+  function getCheckoutCustomer() {
+    return {
+      name: $("#customer-name")?.value.trim() || "",
+      phone: $("#customer-phone")?.value.trim() || "",
+      email: $("#customer-email")?.value.trim() || "",
+      address: $("#customer-address")?.value.trim() || "",
+      city: $("#customer-city")?.value.trim() || "",
+      pincode: $("#customer-pincode")?.value.trim() || ""
+    };
+  }
+
+  function validateCustomer(customer) {
+    if (customer.name.length < 2) {
+      return "Please enter your full name.";
+    }
+
+    if (!/^[0-9+\-\s()]{10,16}$/.test(customer.phone)) {
+      return "Please enter a valid phone number.";
+    }
+
+    if (customer.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customer.email)) {
+      return "Please enter a valid email address.";
+    }
+
+    if (customer.address.length < 5) {
+      return "Please enter your complete delivery address.";
+    }
+
+    if (!customer.city) {
+      return "Please enter your city.";
+    }
+
+    if (!/^[0-9]{6}$/.test(customer.pincode)) {
+      return "Please enter a valid 6-digit PIN code.";
+    }
+
+    return "";
+  }
+
+  function handleCheckout(event) {
+    event.preventDefault();
+
+    const form = $("#checkout-form");
+
+    if (form && !form.reportValidity()) {
+      return;
+    }
+
+    const customer = getCheckoutCustomer();
+    const validationError = validateCustomer(customer);
+
+    if (validationError) {
+      showToast(validationError, "error");
+      return;
+    }
+
+    if (!cart.length) {
+      showToast("Your cart is empty.", "warning");
+      closeCheckout();
+      return;
+    }
+
+    // Re-check availability and stock before creating an order.
+    const items = getCartItems();
+
+    for (const item of items) {
+      const product = getProduct(item.id);
+
+      if (!product || !product.available || product.stock < item.quantity) {
+        showToast(`${item.name} is no longer available in the requested quantity.`, "error");
+        return;
+      }
+    }
+
+    const totals = calculateTotal();
+    const paymentMethod = $('input[name="paymentMethod"]:checked')?.value || "cod";
+
+    const orderId = createId("CCORDER");
+    const invoiceNumber = `INV-${new Date().getFullYear()}-${Math.random()
+      .toString(10)
+      .slice(2, 8)}`;
+
+    const order = {
+      id: orderId,
+      invoiceNumber,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      status: "pending",
+      paymentMethod: paymentMethod === "cod" ? "Cash on Delivery" : paymentMethod,
+      customer,
+      items: items.map((item) => ({
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        image: item.image,
+        price: item.price,
+        quantity: item.quantity
+      })),
+      totals: {
+        subtotal: Number(totals.subtotal.toFixed(2)),
+        discount: Number(totals.discount.toFixed(2)),
+        delivery: Number(totals.delivery.toFixed(2)),
+        tax: Number(totals.tax.toFixed(2)),
+        total: Number(totals.total.toFixed(2))
+      },
+      coupon: activeCoupon?.code || null
+    };
+
+    // Reduce demo inventory locally.
+    items.forEach((item) => {
+      const product = getProduct(item.id);
+
+      if (product) {
+        product.stock = Math.max(0, product.stock - item.quantity);
+        if (product.stock === 0) {
+          product.available = false;
+        }
+      }
+    });
+
+    orders.unshift(order);
+    lastOrder = order;
+    cart = [];
+    activeCoupon = null;
+
+    writeStorage(CONFIG.storage.products, products);
+    saveState();
+
+    closeCheckout();
+    renderProducts();
+    renderCategoryCounts();
+    renderCart();
+
+    showToast(`Order placed successfully! Order ID: ${orderId}`);
+
+    openInvoice(order);
+
+    // Optional integration hook for a future backend.
+    document.dispatchEvent(new CustomEvent("cravecart:order-created", {
+      detail: { order }
+    }));
+  }
+
+  /* ==========================================================
+     16. SEARCH AND SORT
+  ========================================================== */
+
+  function setupSearch() {
+    const searchInput = $("#product-search");
+    const clearButton = $("#clear-search");
+    const searchToggle = $("#search-toggle");
+    const searchPanel = $("#search-panel");
+
+    searchInput?.addEventListener("input", () => {
+      searchTerm = searchInput.value.trim();
+      renderProducts();
+
+      if (clearButton) {
+        clearButton.hidden = searchInput.value.length === 0;
+      }
+    });
+
+    clearButton?.addEventListener("click", () => {
+      if (searchInput) {
+        searchInput.value = "";
+        searchTerm = "";
+        renderProducts();
+        searchInput.focus();
+      }
+
+      clearButton.hidden = true;
+    });
+
+    searchToggle?.addEventListener("click", () => {
+      if (!searchPanel) return;
+
+      const willOpen = searchPanel.hidden;
+
+      searchPanel.hidden = !willOpen;
+
+      if (willOpen) {
+        searchInput?.focus();
+      }
+    });
+
+    const sortSelect = $("#sort-products");
+
+    sortSelect?.addEventListener("change", () => {
+      sortMode = sortSelect.value;
+      renderProducts();
+    });
+  }
+
+  /* ==========================================================
+     17. MOBILE NAVIGATION
+  ========================================================== */
+
+  function setupMobileMenu() {
+    const toggle = $("#mobile-menu-toggle");
+    const mobileNavigation = $("#mobile-navigation");
+
+    if (!toggle || !mobileNavigation) return;
+
+    toggle.addEventListener("click", () => {
+      const isOpen = !mobileNavigation.hidden;
+
+      mobileNavigation.hidden = isOpen;
+      toggle.setAttribute("aria-expanded", String(!isOpen));
+      toggle.classList.toggle("is-active", !isOpen);
+    });
+
+    $$("a", mobileNavigation).forEach((link) => {
+      link.addEventListener("click", () => {
+        mobileNavigation.hidden = true;
+        toggle.setAttribute("aria-expanded", "false");
+        toggle.classList.remove("is-active");
+      });
+    });
+  }
+
+  /* ==========================================================
+     18. NEWSLETTER DEMO
+  ========================================================== */
+
+  function setupNewsletter() {
+    const form = $("#newsletter-form");
+    const emailInput = $("#newsletter-email");
+    const message = $("#newsletter-message");
+
+    form?.addEventListener("submit", (event) => {
+      event.preventDefault();
+
+      const email = emailInput?.value.trim() || "";
+
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        if (message) {
+          message.textContent = "Please enter a valid email address.";
+        }
+
+        showToast("Please enter a valid email address.", "error");
+        return;
+      }
+
+      const emails = readStorage(CONFIG.storage.newsletter, []);
+
+      if (!emails.includes(email)) {
+        emails.push(email);
+        writeStorage(CONFIG.storage.newsletter, emails);
+      }
+
+      if (message) {
+        message.textContent = "Thanks for subscribing!";
+      }
+
+      form.reset();
+      showToast("Thanks for subscribing to CraveCart!");
+    });
+  }
+
+  /* ==========================================================
+     19. BACK TO TOP AND HEADER EFFECTS
+  ========================================================== */
+
+  function setupScrollEffects() {
+    const backToTop = $("#back-to-top");
+    const header = $("#site-header");
+
+    const updateScrollState = () => {
+      const shouldShow = window.scrollY > 400;
+
+      if (backToTop) {
+        backToTop.hidden = !shouldShow;
+        backToTop.classList.toggle("is-visible", shouldShow);
+      }
+
+      if (header) {
+        header.classList.toggle("is-scrolled", window.scrollY > 20);
+      }
+    };
+
+    window.addEventListener("scroll", updateScrollState, { passive: true });
+    updateScrollState();
+
+    backToTop?.addEventListener("click", () => {
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth"
+      });
+    });
+  }
+
+  /* ==========================================================
+     20. CLICK EVENT DELEGATION
+  ========================================================== */
+
+  function setupGlobalClickHandlers() {
+    document.addEventListener("click", (event) => {
+      const actionElement = event.target.closest("[data-action]");
+
+      if (actionElement) {
+        const action = actionElement.dataset.action;
+        const id = actionElement.dataset.id;
+
+        switch (action) {
+          case "add-to-cart":
+            addToCart(id);
+            break;
+
+          case "toggle-wishlist":
+            toggleWishlist(id);
+            break;
+
+          case "open-cart":
+            openCart();
+            break;
+
+          case "open-wishlist":
+            openWishlist();
+            break;
+
+          case "close-cart":
+            closeCart();
+            break;
+
+          case "close-wishlist":
+            closeWishlist();
+            break;
+
+          case "close-checkout":
+            closeCheckout();
+            break;
+
+          case "close-invoice":
+            closeInvoice();
+            break;
+
+          case "open-checkout":
+            openCheckout();
+            break;
+
+          case "increase-quantity":
+            changeCartQuantity(id, 1);
+            break;
+
+          case "decrease-quantity":
+            changeCartQuantity(id, -1);
+            break;
+
+          case "remove-from-cart":
+            removeFromCart(id);
+            break;
+
+          case "clear-cart":
+            clearCart();
+            break;
+
+          case "remove-from-wishlist":
+            removeFromWishlist(id);
+            break;
+
+          case "wishlist-add-to-cart":
+            addToCart(id);
+            break;
+
+          case "apply-coupon":
+            applyCoupon();
+            break;
+
+          case "print-invoice":
+            printInvoice();
+            break;
+
+          case "download-invoice":
+            downloadInvoice();
+            break;
+
+          default:
+            break;
+        }
+      }
+
+      const categoryCard = event.target.closest(".category-card[data-category]");
+
+      if (categoryCard) {
+        setActiveCategory(categoryCard.dataset.category);
+      }
+
+      const resetButton = event.target.closest("#reset-filters, #show-all-products");
+
+      if (resetButton) {
+        activeCategory = "all";
+        searchTerm = "";
+
+        const searchInput = $("#product-search");
+        if (searchInput) searchInput.value = "";
+
+        const clearButton = $("#clear-search");
+        if (clearButton) clearButton.hidden = true;
+
+        const sortSelect = $("#sort-products");
+        if (sortSelect) {
+          sortSelect.value = "featured";
+          sortMode = "featured";
+        }
+
+        setActiveCategory("all");
+      }
+
+      // Close drawers/modals when their overlay is clicked.
+      if (event.target.matches("#cart-overlay")) {
+        closeCart();
+      }
+
+      if (event.target.matches("#wishlist-overlay")) {
+        closeWishlist();
+      }
+
+      if (event.target.matches("#checkout-overlay")) {
+        closeCheckout();
+      }
+
+      // Close elements through common close-button patterns.
+      if (
+        event.target.closest("[data-close-cart]") ||
+        event.target.closest("[data-close-drawer]")
+      ) {
+        closeCart();
+      }
+
+      if (event.target.closest("[data-close-wishlist]")) {
+        closeWishlist();
+      }
+
+      if (event.target.closest("[data-close-checkout]")) {
+        closeCheckout();
+      }
+
+      if (event.target.closest("[data-close-invoice]")) {
+        closeInvoice();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeCart();
+        closeWishlist();
+        closeCheckout();
+        closeInvoice();
+      }
+    });
+
+    $("#apply-coupon")?.addEventListener("click", applyCoupon);
+    $("#print-invoice")?.addEventListener("click", printInvoice);
+    $("#download-invoice")?.addEventListener("click", downloadInvoice);
+
+    $("#checkout-form")?.addEventListener("submit", handleCheckout);
+  }
+
+  /* ==========================================================
+     21. PRODUCT STORAGE REFRESH
+     Keeps this frontend catalogue in sync with products saved
+     locally by a compatible demo admin panel.
+  ========================================================== */
+
+  window.addEventListener("storage", (event) => {
+    if (event.key === CONFIG.storage.products) {
+      initialiseProducts();
+      renderProducts();
+      renderCategoryCounts();
+      renderCart();
+    }
+
+    if (event.key === CONFIG.storage.orders) {
+      orders = readStorage(CONFIG.storage.orders, []);
+    }
+  });
+
+  /* ==========================================================
+     22. INITIALISE WEBSITE
+  ========================================================== */
+
+  function initialiseWebsite() {
+    initialiseProducts();
+    loadState();
+
+    // Remove cart entries that no longer exist.
+    cart = cart.filter((item) => Boolean(getProduct(item.id)));
+
+    // Remove wishlist entries that no longer exist.
+    wishlist = wishlist.filter((id) => Boolean(getProduct(id)));
+
+    const currentYear = $("#current-year");
+    if (currentYear) {
+      currentYear.textContent = new Date().getFullYear();
+    }
+
+    const adminYear = $("#admin-year");
+    if (adminYear) {
+      adminYear.textContent = new Date().getFullYear();
+    }
+
+    setupSearch();
+    setupMobileMenu();
+    setupNewsletter();
+    setupScrollEffects();
+    setupGlobalClickHandlers();
+
+    renderProducts();
+    renderCategoryCounts();
+    renderCart();
+    renderWishlist();
+
+    // Restore coupon field when the page is refreshed.
+    if (activeCoupon?.code) {
+      const couponInput = $("#coupon-code");
+      if (couponInput) couponInput.value = activeCoupon.code;
+    }
+
+    const status = $("#app-status");
+    if (status) {
+      status.textContent = "CraveCart is ready.";
+    }
+
+    console.info(
+      `CraveCart ready: ${products.length} vegetarian products loaded.`
+    );
+
+    document.dispatchEvent(new CustomEvent("cravecart:ready", {
+      detail: {
+        productCount: products.length,
+        cartCount: cart.length,
+        wishlistCount: wishlist.length
+      }
+    }));
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initialiseWebsite, {
+      once: true
+    });
+  } else {
+    initialiseWebsite();
+  }
+
+  /* ==========================================================
+     23. OPTIONAL PUBLIC API
+     Useful for debugging in the browser console.
+  ========================================================== */
+
+  window.CraveCart = {
+    getProducts: () => [...products],
+    getCart: getCartItems,
+    getWishlist: () => [...wishlist],
+    getOrders: () => [...orders],
+    addToCart,
+    removeFromCart,
+    clearCart,
+    toggleWishlist,
+    openCart,
+    closeCart,
+    openWishlist,
+    closeWishlist,
+    openCheckout,
+    renderProducts,
+    renderCart,
+    renderWishlist,
+    money
+  };
+
 })();
-```
