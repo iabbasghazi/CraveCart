@@ -1,3 +1,90 @@
+## 📁 Folder Structure
+
+The following is the proposed full-stack folder structure.
+
+```text
+CraveCart/
+│
+├── frontend/
+│   │
+│   ├── index.html
+│   ├── style.css
+│   ├── app.js
+│   │
+│   ├── admin.html
+│   ├── admin.css
+│   ├── admin.js
+│   │
+│   └── assets/
+│       ├── images/
+│       │   ├── logo.png
+│       │   ├── placeholders/
+│       │   └── banners/
+│       └── icons/
+│
+├── backend/
+│   │
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── server.js
+│   │
+│   ├── routes/
+│   │   ├── auth.js
+│   │   ├── products.js
+│   │   ├── categories.js
+│   │   ├── coupons.js
+│   │   ├── orders.js
+│   │   ├── users.js
+│   │   └── invoices.js
+│   │
+│   ├── controllers/
+│   │   ├── authController.js
+│   │   ├── productController.js
+│   │   ├── couponController.js
+│   │   ├── orderController.js
+│   │   └── invoiceController.js
+│   │
+│   ├── middleware/
+│   │   ├── auth.js
+│   │   ├── errorHandler.js
+│   │   └── validateRequest.js
+│   │
+│   ├── services/
+│   │   ├── pricingService.js
+│   │   ├── couponService.js
+│   │   ├── inventoryService.js
+│   │   └── invoiceService.js
+│   │
+│   ├── db/
+│   │   ├── database.js
+│   │   └── migrations/
+│   │
+│   ├── utils/
+│   │   ├── logger.js
+│   │   └── response.js
+│   │
+│   └── tests/
+│       ├── products.test.js
+│       ├── coupons.test.js
+│       └── orders.test.js
+│
+├── database/
+│   ├── schema.sql
+│   └── seed.sql
+│
+├── docs/
+│   ├── screenshots/
+│   ├── project-report.md
+│   ├── database-design.md
+│   ├── api-documentation.md
+│   └── testing.md
+│
+├── .gitignore
+├── README.md
+└── LICENSE
+```
+
+
 # 🍕 CraveCart — Premium Vegetarian Food Ordering Platform
 
 <p align="center">
